@@ -105,6 +105,13 @@ describe("wsNativeApi", () => {
 
     socket?.emitMessage(
       JSON.stringify({
+        type: "hello",
+        version: 1,
+        launchCwd: "/workspace",
+      }),
+    );
+    socket?.emitMessage(
+      JSON.stringify({
         type: "response",
         id: requestEnvelope.id,
         ok: true,
