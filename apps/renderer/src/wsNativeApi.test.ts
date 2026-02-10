@@ -253,6 +253,20 @@ describe("wsNativeApi", () => {
     );
   });
 
+  it("falls back safely when send throw payload contains cyclic error references", async () => {
+    setWindowSearch("?ws=ws%3A%2F%2F127.0.0.1%3A4520");
+    MockWebSocket.failSend = true;
+    const cyclicError: { error?: unknown } = {};
+    cyclicError.error = cyclicError;
+    MockWebSocket.failSendError = cyclicError;
+    const { getOrCreateWsNativeApi } = await import("./wsNativeApi");
+    const api = getOrCreateWsNativeApi();
+
+    await expect(api.todos.list()).rejects.toThrow(
+      "Failed to send runtime request 'todos.list': unknown websocket failure",
+    );
+  });
+
   it("recovers after a transient websocket send failure", async () => {
     setWindowSearch("?ws=ws%3A%2F%2F127.0.0.1%3A4480");
     MockWebSocket.failSend = true;
@@ -2309,6 +2323,18 @@ describe("wsNativeApi", () => {
     setWindowSearch("?ws=ws%3A%2F%2F127.0.0.1%3A4494");
     MockWebSocket.failConstruct = true;
     MockWebSocket.failConstructError = { message: "   " };
+    const { getOrCreateWsNativeApi } = await import("./wsNativeApi");
+    const api = getOrCreateWsNativeApi();
+
+    await expect(api.todos.list()).rejects.toThrow("Failed to connect to local t3 runtime.");
+  });
+
+  it("falls back safely when constructor throw payload contains cyclic error references", async () => {
+    setWindowSearch("?ws=ws%3A%2F%2F127.0.0.1%3A4521");
+    MockWebSocket.failConstruct = true;
+    const cyclicError: { error?: unknown } = {};
+    cyclicError.error = cyclicError;
+    MockWebSocket.failConstructError = cyclicError;
     const { getOrCreateWsNativeApi } = await import("./wsNativeApi");
     const api = getOrCreateWsNativeApi();
 
