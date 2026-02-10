@@ -142,6 +142,29 @@ describe("wsNativeApi", () => {
     await expect(request).resolves.toEqual([]);
   });
 
+  it("configures websocket binaryType to arraybuffer", async () => {
+    setWindowSearch("?ws=ws%3A%2F%2F127.0.0.1%3A4430");
+    const { getOrCreateWsNativeApi } = await import("./wsNativeApi");
+    const api = getOrCreateWsNativeApi();
+
+    const request = api.todos.list();
+    const socket = await waitForSocket();
+    expect(socket.binaryType).toBe("arraybuffer");
+    await waitForCondition(() => socket.sentMessages.length > 0);
+    const requestEnvelope = JSON.parse(socket.sentMessages[0] ?? "{}") as {
+      id: string;
+    };
+    socket.emitMessage(
+      JSON.stringify({
+        type: "response",
+        id: requestEnvelope.id,
+        ok: true,
+        result: [],
+      }),
+    );
+    await expect(request).resolves.toEqual([]);
+  });
+
   it("rejects immediately when websocket send throws", async () => {
     setWindowSearch("?ws=ws%3A%2F%2F127.0.0.1%3A4401");
     MockWebSocket.failSend = true;
