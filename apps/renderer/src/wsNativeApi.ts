@@ -99,6 +99,16 @@ function runtimeConnectErrorFromSocketError(event: unknown) {
   return new Error("Failed to connect to local t3 runtime.");
 }
 
+function runtimeConnectErrorFromConstructionError(error: unknown) {
+  const message = normalizeSocketErrorMessage(
+    error instanceof Error ? error.message : (error as { message?: unknown } | null)?.message,
+  );
+  if (message) {
+    return new Error(`Failed to connect to local t3 runtime: websocket error (${message}).`);
+  }
+  return new Error("Failed to connect to local t3 runtime.");
+}
+
 function socketErrorMessage(event: unknown) {
   const directMessage = (event as { message?: unknown } | null)?.message;
   const normalizedDirectMessage = normalizeSocketErrorMessage(directMessage);
@@ -161,8 +171,8 @@ class WsNativeApiClient {
       let socket: WebSocket;
       try {
         socket = new WebSocket(this.wsUrl);
-      } catch {
-        reject(new Error("Failed to connect to local t3 runtime."));
+      } catch (error) {
+        reject(runtimeConnectErrorFromConstructionError(error));
         return;
       }
       socket.binaryType = "arraybuffer";

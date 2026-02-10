@@ -1974,7 +1974,9 @@ describe("wsNativeApi", () => {
     const { getOrCreateWsNativeApi } = await import("./wsNativeApi");
     const api = getOrCreateWsNativeApi();
 
-    await expect(api.todos.list()).rejects.toThrow("Failed to connect to local t3 runtime.");
+    await expect(api.todos.list()).rejects.toThrow(
+      "Failed to connect to local t3 runtime: websocket error (mock constructor failure).",
+    );
   });
 
   it("recovers after websocket construction failure on next request", async () => {
@@ -1983,7 +1985,9 @@ describe("wsNativeApi", () => {
     const { getOrCreateWsNativeApi } = await import("./wsNativeApi");
     const api = getOrCreateWsNativeApi();
 
-    await expect(api.todos.list()).rejects.toThrow("Failed to connect to local t3 runtime.");
+    await expect(api.todos.list()).rejects.toThrow(
+      "Failed to connect to local t3 runtime: websocket error (mock constructor failure).",
+    );
 
     MockWebSocket.failConstruct = false;
     const secondRequest = api.todos.list();
