@@ -64,4 +64,13 @@ describe("ws close metadata", () => {
     expect(WS_CLOSE_CODES.replacedByNewClient).toBe(4000);
     expect(WS_CLOSE_REASONS.replacedByNewClient).toBe("replaced-by-new-client");
   });
+
+  it("keeps close codes and reasons unique", () => {
+    expect(
+      new Set([WS_CLOSE_CODES.unauthorized, WS_CLOSE_CODES.replacedByNewClient]).size,
+    ).toBe(2);
+    expect(
+      new Set([WS_CLOSE_REASONS.unauthorized, WS_CLOSE_REASONS.replacedByNewClient]).size,
+    ).toBe(2);
+  });
 });
