@@ -220,6 +220,9 @@ async function main() {
     if ((assetResponse.headers.get("cross-origin-resource-policy") ?? "").toLowerCase() !== "same-origin") {
       throw new Error("Smoke test failed: expected CORP header on built asset response.");
     }
+    if ((assetResponse.headers.get("cross-origin-opener-policy") ?? "").toLowerCase() !== "same-origin") {
+      throw new Error("Smoke test failed: expected COOP header on built asset response.");
+    }
     const headAssetResponse = await fetch(assetUrl, { method: "HEAD" });
     if (headAssetResponse.status !== 200) {
       throw new Error(
