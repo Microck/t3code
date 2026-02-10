@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 
 import {
+  WS_METHOD_MAX_CHARS,
+  WS_REQUEST_ID_MAX_CHARS,
   WS_CLOSE_CODES,
   WS_CLOSE_REASONS,
   WS_EVENT_CHANNELS,
@@ -759,7 +761,7 @@ describe("runtimeApiServer", () => {
     client.socket.send(
       JSON.stringify({
         type: "request",
-        id: "x".repeat(300),
+        id: "x".repeat(WS_REQUEST_ID_MAX_CHARS + 1),
         method: "todos.list",
       }),
     );
@@ -767,7 +769,7 @@ describe("runtimeApiServer", () => {
       JSON.stringify({
         type: "request",
         id: "malformed-long-method",
-        method: "m".repeat(300),
+        method: "m".repeat(WS_METHOD_MAX_CHARS + 1),
       }),
     );
 
