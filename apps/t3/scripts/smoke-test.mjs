@@ -390,6 +390,17 @@ async function main() {
         "Smoke test failed: expected cache-control=no-store on stale If-Unmodified-Since response.",
       );
     }
+    const ifUnmodifiedSinceRangeStaleAsset = await fetch(assetUrl, {
+      headers: {
+        Range: "bytes=0-15",
+        "If-Unmodified-Since": staleUnmodifiedSince,
+      },
+    });
+    if (ifUnmodifiedSinceRangeStaleAsset.status !== 412) {
+      throw new Error(
+        `Smoke test failed: expected ranged stale If-Unmodified-Since status 412, received ${ifUnmodifiedSinceRangeStaleAsset.status}.`,
+      );
+    }
     const ifUnmodifiedSinceCurrentAsset = await fetch(assetUrl, {
       headers: {
         "If-Unmodified-Since": assetLastModified,
