@@ -2,7 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -572,6 +572,19 @@ export function resolveStaticAssetReadTarget(
   return indexFile;
 }
 
+function applyStaticSecurityHeaders(
+  response: ServerResponse,
+  options: {
+    cacheControl: string;
+  },
+): void {
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  response.setHeader("Cache-Control", options.cacheControl);
+}
+
 function startStaticWebServer(distRoot: string, port: number) {
   const normalizedDistRoot = path.resolve(distRoot);
   const resolvedRealDistRoot = (() => {
@@ -593,11 +606,9 @@ function startStaticWebServer(distRoot: string, port: number) {
       response.statusCode = statusCode;
       response.setHeader("Content-Type", "text/plain; charset=utf-8");
       response.setHeader("Content-Length", String(body.byteLength));
-      response.setHeader("X-Content-Type-Options", "nosniff");
-      response.setHeader("X-Frame-Options", "DENY");
-      response.setHeader("Referrer-Policy", "no-referrer");
-      response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-      response.setHeader("Cache-Control", "no-store");
+      applyStaticSecurityHeaders(response, {
+        cacheControl: "no-store",
+      });
       for (const [key, value] of Object.entries(extraHeaders)) {
         response.setHeader(key, value);
       }
@@ -644,11 +655,9 @@ function startStaticWebServer(distRoot: string, port: number) {
         response.statusCode = 200;
         response.setHeader("Content-Type", contentTypeFor(targetPath));
         response.setHeader("Content-Length", String(stats.size));
-        response.setHeader("X-Content-Type-Options", "nosniff");
-        response.setHeader("X-Frame-Options", "DENY");
-        response.setHeader("Referrer-Policy", "no-referrer");
-        response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-        response.setHeader("Cache-Control", cacheControlFor(targetPath));
+        applyStaticSecurityHeaders(response, {
+          cacheControl: cacheControlFor(targetPath),
+        });
         response.end();
       });
       return;
@@ -662,12 +671,10 @@ function startStaticWebServer(distRoot: string, port: number) {
 
       response.statusCode = 200;
       response.setHeader("Content-Type", contentTypeFor(targetPath));
-      response.setHeader("X-Content-Type-Options", "nosniff");
-      response.setHeader("X-Frame-Options", "DENY");
-      response.setHeader("Referrer-Policy", "no-referrer");
-      response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
       response.setHeader("Content-Length", String(content.byteLength));
-      response.setHeader("Cache-Control", cacheControlFor(targetPath));
+      applyStaticSecurityHeaders(response, {
+        cacheControl: cacheControlFor(targetPath),
+      });
       response.end(content);
     });
   });
