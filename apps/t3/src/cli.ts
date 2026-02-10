@@ -796,6 +796,7 @@ function startStaticWebServer(distRoot: string, port: number) {
           String(resolvedRange ? resolvedRange.end - resolvedRange.start + 1 : stats.size),
         );
         response.setHeader("Accept-Ranges", "bytes");
+        response.setHeader("Vary", "Range");
         if (resolvedRange) {
           response.setHeader("Content-Range", `bytes ${resolvedRange.start}-${resolvedRange.end}/${stats.size}`);
         }
@@ -827,6 +828,7 @@ function startStaticWebServer(distRoot: string, port: number) {
         String(resolvedRange ? resolvedRange.end - resolvedRange.start + 1 : stats.size),
       );
       response.setHeader("Accept-Ranges", "bytes");
+      response.setHeader("Vary", "Range");
       if (resolvedRange) {
         response.setHeader("Content-Range", `bytes ${resolvedRange.start}-${resolvedRange.end}/${stats.size}`);
       }

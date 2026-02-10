@@ -190,6 +190,9 @@ async function main() {
     if ((page.headers.get("accept-ranges") ?? "").toLowerCase() !== "bytes") {
       throw new Error("Smoke test failed: expected accept-ranges=bytes on HTML response.");
     }
+    if ((page.headers.get("vary") ?? "").toLowerCase() !== "range") {
+      throw new Error("Smoke test failed: expected vary=range on HTML response.");
+    }
     const html = await page.text();
     const assetMatch = html.match(/(?:src|href)="(\/assets\/[^"]+)"/);
     if (!assetMatch?.[1]) {
@@ -235,6 +238,9 @@ async function main() {
     if ((assetResponse.headers.get("accept-ranges") ?? "").toLowerCase() !== "bytes") {
       throw new Error("Smoke test failed: expected accept-ranges=bytes on built asset response.");
     }
+    if ((assetResponse.headers.get("vary") ?? "").toLowerCase() !== "range") {
+      throw new Error("Smoke test failed: expected vary=range on built asset response.");
+    }
     const assetContentLength = Number(assetResponse.headers.get("content-length") ?? "0");
     if (!Number.isFinite(assetContentLength) || assetContentLength <= 0) {
       throw new Error(
@@ -272,6 +278,9 @@ async function main() {
     }
     if ((rangedAsset.headers.get("accept-ranges") ?? "").toLowerCase() !== "bytes") {
       throw new Error("Smoke test failed: expected accept-ranges=bytes on ranged asset response.");
+    }
+    if ((rangedAsset.headers.get("vary") ?? "").toLowerCase() !== "range") {
+      throw new Error("Smoke test failed: expected vary=range on ranged asset response.");
     }
     const unsatisfiableRange = await fetch(assetUrl, {
       headers: {
@@ -341,6 +350,9 @@ async function main() {
     if ((headAssetResponse.headers.get("accept-ranges") ?? "").toLowerCase() !== "bytes") {
       throw new Error("Smoke test failed: expected accept-ranges=bytes on HEAD asset response.");
     }
+    if ((headAssetResponse.headers.get("vary") ?? "").toLowerCase() !== "range") {
+      throw new Error("Smoke test failed: expected vary=range on HEAD asset response.");
+    }
     const headRangedAsset = await fetch(assetUrl, {
       method: "HEAD",
       headers: {
@@ -371,6 +383,9 @@ async function main() {
       throw new Error(
         "Smoke test failed: expected accept-ranges=bytes on HEAD ranged asset response.",
       );
+    }
+    if ((headRangedAsset.headers.get("vary") ?? "").toLowerCase() !== "range") {
+      throw new Error("Smoke test failed: expected vary=range on HEAD ranged asset response.");
     }
     const headUnsatisfiableRange = await fetch(assetUrl, {
       method: "HEAD",
@@ -549,6 +564,9 @@ async function main() {
     }
     if ((headPage.headers.get("accept-ranges") ?? "").toLowerCase() !== "bytes") {
       throw new Error("Smoke test failed: expected accept-ranges=bytes on HEAD app response.");
+    }
+    if ((headPage.headers.get("vary") ?? "").toLowerCase() !== "range") {
+      throw new Error("Smoke test failed: expected vary=range on HEAD app response.");
     }
     const headContentLength = Number(headPage.headers.get("content-length") ?? "0");
     if (!Number.isFinite(headContentLength) || headContentLength <= 0) {
