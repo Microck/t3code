@@ -4,7 +4,7 @@ import {
   type GitStatusResult,
   type NativeApi,
 } from "@t3tools/contracts";
-import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckIcon,
@@ -48,6 +48,11 @@ interface GitProgressStep {
   detail?: string;
 }
 
+interface GitProgressToastAction {
+  kind: "open_pr" | "create_pr";
+  label: "Open PR" | "Create PR";
+}
+
 function GitActionIcon(props: { icon: GitActionIconName; disabled: boolean }) {
   const toneClass = props.disabled ? "text-muted-foreground/45" : "text-foreground/85";
 
@@ -73,14 +78,10 @@ function gitActionModalTitle(): string {
   return "Commit your changes";
 }
 
-function initialGitProgressSteps(
-  action: GitStackedAction,
-  commitMessage: string,
-): GitProgressStep[] {
-  const hasCustomMessage = commitMessage.trim().length > 0;
+function initialGitProgressSteps(action: GitStackedAction, includeGenerateStep: boolean): GitProgressStep[] {
   const steps: GitProgressStep[] = [];
 
-  if (!hasCustomMessage) {
+  if (includeGenerateStep) {
     steps.push({
       id: "generate",
       label: "Generate commit message",
@@ -135,6 +136,48 @@ function runActionLabel(action: GitStackedAction): string {
   return "Commit and create PR";
 }
 
+function canCreatePrFromStatus(gitStatus: GitStatusResult | null): boolean {
+  if (!gitStatus) return false;
+  const hasBranch = gitStatus.branch !== null;
+  const hasOpenPr = gitStatus.openPr !== null;
+
+  return (
+    hasBranch &&
+    !hasOpenPr &&
+    !gitStatus.hasWorkingTreeChanges &&
+    gitStatus.hasUpstream &&
+    gitStatus.behindCount === 0
+  );
+}
+
+export function getGitProgressToastAction(params: {
+  isRunning: boolean;
+  hasError: boolean;
+  result: GitRunStackedActionResult | null;
+  gitStatus: GitStatusResult | null;
+  openPrUrl: string | null;
+}): GitProgressToastAction | null {
+  if (params.isRunning || params.hasError || !params.result) {
+    return null;
+  }
+
+  if (params.openPrUrl) {
+    return {
+      kind: "open_pr",
+      label: "Open PR",
+    };
+  }
+
+  if (params.result.action === "commit_push" && canCreatePrFromStatus(params.gitStatus)) {
+    return {
+      kind: "create_pr",
+      label: "Create PR",
+    };
+  }
+
+  return null;
+}
+
 function buildGitActionMenuItems(
   gitStatus: GitStatusResult | null,
   isDisabled: boolean,
@@ -148,13 +191,7 @@ function buildGitActionMenuItems(
   const canCommit = !isDisabled && hasChanges;
   const canPush = !isDisabled && hasBranch && !hasChanges && hasAhead;
   const canOpenPr = !isDisabled && hasOpenPr;
-  const canCreatePr =
-    !isDisabled &&
-    hasBranch &&
-    !hasOpenPr &&
-    !hasChanges &&
-    gitStatus.hasUpstream &&
-    gitStatus.behindCount === 0;
+  const canCreatePr = !isDisabled && canCreatePrFromStatus(gitStatus);
 
   return [
     {
@@ -261,27 +298,7 @@ export default function GitActionsControl({ api, gitCwd }: GitActionsControlProp
     gitStatusQueryOptions(api, gitCwd),
   );
 
-  const runImmediateGitActionMutation = useMutation({
-    mutationFn: async (action: GitStackedAction) => {
-      if (!api || !gitCwd) {
-        throw new Error("Git action is unavailable.");
-      }
-      return api.git.runStackedAction({ cwd: gitCwd, action });
-    },
-    onMutate: () => {
-      setIsGitMenuOpen(false);
-      setGitActionError(null);
-      setGitModalError(null);
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["git"] });
-    },
-    onError: (error) => {
-      setGitActionError(error instanceof Error ? error.message : "Git action failed.");
-    },
-  });
-
-  const isGitActionRunning = isGitModalActionRunning || runImmediateGitActionMutation.isPending;
+  const isGitActionRunning = isGitModalActionRunning;
 
   const gitBaseDisabled = !api || !gitCwd || !gitStatus || isGitActionRunning;
   const gitActionMenuItems = useMemo(
@@ -318,6 +335,23 @@ export default function GitActionsControl({ api, gitCwd }: GitActionsControlProp
     : gitModalError
       ? "Git action failed."
       : "Done.";
+  const gitProgressToastAction = useMemo(
+    () =>
+      getGitProgressToastAction({
+        isRunning: isGitModalActionRunning,
+        hasError: gitModalError !== null,
+        result: gitModalResult,
+        gitStatus,
+        openPrUrl: gitProgressToastOpenPrUrl,
+      }),
+    [
+      gitModalError,
+      gitModalResult,
+      gitProgressToastOpenPrUrl,
+      gitStatus,
+      isGitModalActionRunning,
+    ],
+  );
 
   const refreshGitStatus = useCallback(async () => {
     if (!api || !gitCwd) return;
@@ -343,13 +377,6 @@ export default function GitActionsControl({ api, gitCwd }: GitActionsControlProp
     setGitModalSelectedAction("commit");
     setGitModalCommitMessage("");
   }, [isGitActionRunning]);
-
-  const runGitActionImmediately = useCallback(
-    (action: GitStackedAction) => {
-      runImmediateGitActionMutation.mutate(action);
-    },
-    [runImmediateGitActionMutation],
-  );
 
   const openExistingPr = useCallback(() => {
     setIsGitMenuOpen(false);
@@ -392,137 +419,161 @@ export default function GitActionsControl({ api, gitCwd }: GitActionsControlProp
     setGitModalResult(null);
   }, [isGitModalActionRunning]);
 
-  const runGitAction = useCallback(async () => {
-    if (!api || !gitCwd) return;
-    if (!selectedGitModalActionOption || selectedGitModalActionOption.disabled) return;
-    const actionCwd = gitCwd;
-    const action = selectedGitModalActionOption.action;
-    const commitMessage = gitModalCommitMessage.trim();
-    const includeGeneratedCommitMessage = commitMessage.length === 0;
+  const executeGitAction = useCallback(
+    async (params: {
+      action: GitStackedAction;
+      commitMessage: string;
+      includeGeneratedCommitMessage: boolean;
+      closeModal: boolean;
+    }) => {
+      if (!api || !gitCwd) return;
+      const actionCwd = gitCwd;
+      const { action, closeModal, commitMessage, includeGeneratedCommitMessage } = params;
 
-    setIsGitMenuOpen(false);
-    setIsGitModalOpen(false);
-    setIsGitProgressToastVisible(true);
-    setIsGitModalActionRunning(true);
-    setGitModalError(null);
-    setGitActionError(null);
-    setGitModalResult(null);
-    setGitModalProgress(initialGitProgressSteps(action, commitMessage));
-
-    let commit: GitRunStackedActionResult["commit"] = {
-      status: "skipped_no_changes",
-    };
-    let push: GitRunStackedActionResult["push"] = {
-      status: "skipped_not_requested",
-    };
-    let pr: GitRunStackedActionResult["pr"] = {
-      status: "skipped_not_requested",
-    };
-
-    const updateStep = (
-      id: GitProgressStep["id"],
-      status: GitProgressStepStatus,
-      detail?: string,
-    ) => {
-      setGitModalProgress((steps) => updateProgressStep(steps, id, status, detail));
-    };
-
-    try {
-      if (includeGeneratedCommitMessage) {
-        updateStep("generate", "running");
-      } else {
-        updateStep("commit", "running");
+      setIsGitMenuOpen(false);
+      if (closeModal) {
+        setIsGitModalOpen(false);
       }
+      setIsGitProgressToastVisible(true);
+      setIsGitModalActionRunning(true);
+      setGitModalError(null);
+      setGitActionError(null);
+      setGitModalResult(null);
+      setGitModalProgress(initialGitProgressSteps(action, includeGeneratedCommitMessage));
 
-      const commitRun = await api.git.runStackedAction({
-        cwd: actionCwd,
-        action: "commit",
-        ...(commitMessage.length > 0 ? { commitMessage } : {}),
-      });
-      commit = commitRun.commit;
+      let commit: GitRunStackedActionResult["commit"] = {
+        status: "skipped_no_changes",
+      };
+      let push: GitRunStackedActionResult["push"] = {
+        status: "skipped_not_requested",
+      };
+      let pr: GitRunStackedActionResult["pr"] = {
+        status: "skipped_not_requested",
+      };
 
-      if (includeGeneratedCommitMessage) {
-        if (commitRun.commit.status === "created") {
-          if (commitRun.commit.subject) {
-            setGitModalCommitMessage(commitRun.commit.subject);
+      const updateStep = (
+        id: GitProgressStep["id"],
+        status: GitProgressStepStatus,
+        detail?: string,
+      ) => {
+        setGitModalProgress((steps) => updateProgressStep(steps, id, status, detail));
+      };
+
+      try {
+        if (includeGeneratedCommitMessage) {
+          updateStep("generate", "running");
+        } else {
+          updateStep("commit", "running");
+        }
+
+        const commitRun = await api.git.runStackedAction({
+          cwd: actionCwd,
+          action: "commit",
+          ...(commitMessage.length > 0 ? { commitMessage } : {}),
+        });
+        commit = commitRun.commit;
+
+        if (includeGeneratedCommitMessage) {
+          if (commitRun.commit.status === "created") {
+            if (commitRun.commit.subject) {
+              setGitModalCommitMessage(commitRun.commit.subject);
+            }
+            updateStep("generate", "completed");
+          } else {
+            updateStep("generate", "skipped", "No local changes to commit.");
           }
-          updateStep("generate", "completed");
-        } else {
-          updateStep("generate", "skipped", "No local changes to commit.");
         }
-      }
 
-      if (commitRun.commit.status === "created") {
-        updateStep("commit", "completed", commitRun.commit.subject ?? "Committed local changes.");
-      } else {
-        updateStep("commit", "skipped", "No local changes to commit.");
-      }
+        if (commitRun.commit.status === "created") {
+          updateStep("commit", "completed", commitRun.commit.subject ?? "Committed local changes.");
+        } else {
+          updateStep("commit", "skipped", "No local changes to commit.");
+        }
 
-      if (action !== "commit") {
-        updateStep("push", "running");
-        const pushRun = await api.git.runStackedAction({
-          cwd: actionCwd,
-          action: "commit_push",
+        if (action !== "commit") {
+          updateStep("push", "running");
+          const pushRun = await api.git.runStackedAction({
+            cwd: actionCwd,
+            action: "commit_push",
+          });
+          push = pushRun.push;
+          if (pushRun.push.status === "pushed") {
+            updateStep(
+              "push",
+              "completed",
+              pushRun.push.upstreamBranch
+                ? `Pushed to ${pushRun.push.upstreamBranch}.`
+                : "Pushed latest commits.",
+            );
+          } else {
+            updateStep("push", "skipped", "Branch already up to date.");
+          }
+        }
+
+        if (action === "commit_push_pr") {
+          updateStep("pr", "running");
+          const prRun = await api.git.runStackedAction({
+            cwd: actionCwd,
+            action: "commit_push_pr",
+          });
+          pr = prRun.pr;
+          if (prRun.pr.status === "opened_existing") {
+            updateStep(
+              "pr",
+              "completed",
+              prRun.pr.number ? `Opened existing PR #${prRun.pr.number}.` : "Opened existing PR.",
+            );
+          } else if (prRun.pr.status === "created") {
+            updateStep(
+              "pr",
+              "completed",
+              prRun.pr.number ? `Created PR #${prRun.pr.number}.` : "Created PR.",
+            );
+          } else {
+            updateStep("pr", "skipped", "PR step was not requested.");
+          }
+        }
+
+        setGitModalResult({ action, commit, push, pr });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Git action failed.";
+        setGitModalError(message);
+        setGitActionError(message);
+        setGitModalProgress((steps) => {
+          const active = steps.find((step) => step.status === "running");
+          if (!active) return steps;
+          return updateProgressStep(steps, active.id, "failed", message);
         });
-        push = pushRun.push;
-        if (pushRun.push.status === "pushed") {
-          updateStep(
-            "push",
-            "completed",
-            pushRun.push.upstreamBranch
-              ? `Pushed to ${pushRun.push.upstreamBranch}.`
-              : "Pushed latest commits.",
-          );
-        } else {
-          updateStep("push", "skipped", "Branch already up to date.");
-        }
+      } finally {
+        setIsGitModalActionRunning(false);
+        await refreshGitStatus().catch(() => undefined);
       }
+    },
+    [api, gitCwd, refreshGitStatus],
+  );
 
-      if (action === "commit_push_pr") {
-        updateStep("pr", "running");
-        const prRun = await api.git.runStackedAction({
-          cwd: actionCwd,
-          action: "commit_push_pr",
-        });
-        pr = prRun.pr;
-        if (prRun.pr.status === "opened_existing") {
-          updateStep(
-            "pr",
-            "completed",
-            prRun.pr.number ? `Opened existing PR #${prRun.pr.number}.` : "Opened existing PR.",
-          );
-        } else if (prRun.pr.status === "created") {
-          updateStep(
-            "pr",
-            "completed",
-            prRun.pr.number ? `Created PR #${prRun.pr.number}.` : "Created PR.",
-          );
-        } else {
-          updateStep("pr", "skipped", "PR step was not requested.");
-        }
-      }
-
-      setGitModalResult({ action, commit, push, pr });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Git action failed.";
-      setGitModalError(message);
-      setGitActionError(message);
-      setGitModalProgress((steps) => {
-        const active = steps.find((step) => step.status === "running");
-        if (!active) return steps;
-        return updateProgressStep(steps, active.id, "failed", message);
+  const runGitActionImmediately = useCallback(
+    (action: GitStackedAction) => {
+      void executeGitAction({
+        action,
+        commitMessage: "",
+        includeGeneratedCommitMessage: false,
+        closeModal: false,
       });
-    } finally {
-      setIsGitModalActionRunning(false);
-      await refreshGitStatus().catch(() => undefined);
-    }
-  }, [
-    api,
-    gitCwd,
-    gitModalCommitMessage,
-    refreshGitStatus,
-    selectedGitModalActionOption,
-  ]);
+    },
+    [executeGitAction],
+  );
+
+  const runGitAction = useCallback(() => {
+    if (!selectedGitModalActionOption || selectedGitModalActionOption.disabled) return;
+    const commitMessage = gitModalCommitMessage.trim();
+    void executeGitAction({
+      action: selectedGitModalActionOption.action,
+      commitMessage,
+      includeGeneratedCommitMessage: commitMessage.length === 0,
+      closeModal: true,
+    });
+  }, [executeGitAction, gitModalCommitMessage, selectedGitModalActionOption]);
 
   useEffect(() => {
     setGitActionError(null);
@@ -592,7 +643,7 @@ export default function GitActionsControl({ api, gitCwd }: GitActionsControlProp
           }}
           disabled={!gitStatus || isGitActionRunning}
         >
-          {isGitActionRunning ? "Running..." : "Git actions"}
+          Git actions
           <span aria-hidden="true">▾</span>
         </button>
         {isGitMenuOpen && (
@@ -793,7 +844,7 @@ export default function GitActionsControl({ api, gitCwd }: GitActionsControlProp
                 type="button"
                 className="rounded-xl bg-foreground px-4 py-2 text-sm font-medium text-background transition-colors duration-150 hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => {
-                  void runGitAction();
+                  runGitAction();
                 }}
                 disabled={isGitActionRunning || !selectedGitModalActionOption}
               >
@@ -821,14 +872,20 @@ export default function GitActionsControl({ api, gitCwd }: GitActionsControlProp
               )}
             </span>
             <span className="min-w-0 truncate text-sm text-foreground">{gitProgressToastMessage}</span>
-            {!isGitModalActionRunning && gitModalResult && gitProgressToastOpenPrUrl && (
+            {!isGitModalActionRunning && gitProgressToastAction && (
               <button
                 type="button"
                 className="rounded-md bg-foreground px-2.5 py-1 text-xs font-medium text-background transition-colors duration-150 hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={openPrFromToast}
+                onClick={() => {
+                  if (gitProgressToastAction.kind === "open_pr") {
+                    openPrFromToast();
+                    return;
+                  }
+                  runGitActionImmediately("commit_push_pr");
+                }}
                 disabled={isGitModalActionRunning}
               >
-                Open PR
+                {gitProgressToastAction.label}
               </button>
             )}
             <button
