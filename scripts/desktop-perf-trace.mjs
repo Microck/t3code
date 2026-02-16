@@ -203,12 +203,15 @@ function summarizeTrace(tracePath) {
 }
 
 function createMarkdownSummary({ tracePath, donePayload, summary, thresholds }) {
+  const THREAD_COL_WIDTH = 8;
+  const TITLE_COL_WIDTH = 15;
+  const pad = (value, width) => String(value).padEnd(width, " ");
   const largeThreadRenderStats = Array.isArray(donePayload.interactions?.largeThreadRenderStats)
     ? donePayload.interactions.largeThreadRenderStats
     : [];
   const formatThreadRenderRow = (stat) => {
     const threadShort =
-      typeof stat.threadId === "string" ? stat.threadId.slice(0, 8) : "n/a";
+      typeof stat.threadId === "string" ? stat.threadId.slice(0, THREAD_COL_WIDTH) : "n/a";
     const titleShort =
       typeof stat.threadTitleShort === "string"
         ? stat.threadTitleShort
@@ -233,7 +236,7 @@ function createMarkdownSummary({ tracePath, donePayload, summary, thresholds }) 
       typeof followUpMinMs === "number" && typeof followUpMaxMs === "number"
         ? `${followUpMinMs}-${followUpMaxMs} (${followUpSampleCount}x)`
         : "n/a";
-    return `| ${threadShort} | ${titleShort} | ${stat.messageCount} | ${firstRenderMs} | ${followUpRenderMs} | ${followUpRange} | ${deltaMs} | ${deltaPct}% |`;
+    return `| ${pad(threadShort, THREAD_COL_WIDTH)} | ${pad(titleShort, TITLE_COL_WIDTH)} | ${stat.messageCount} | ${firstRenderMs} | ${followUpRenderMs} | ${followUpRange} | ${deltaMs} | ${deltaPct}% |`;
   };
   const seedSource =
     donePayload.seed?.source === "file"
