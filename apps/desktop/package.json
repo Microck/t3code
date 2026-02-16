@@ -5,7 +5,7 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "bun run --parallel dev:bundle dev:electron",
-    "dev:bundle": "tsdown --watch",
+    "dev:bundle": "tsdown --watch --no-clean",
     "dev:electron": "bun run scripts/dev-electron.mjs",
     "build": "tsdown",
     "start": "electron dist-electron/main.js",
