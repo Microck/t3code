@@ -543,6 +543,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         threads: [...state.threads, nextThread],
         activeThreadId: action.thread.id,
+        threadsHydrated: true,
       };
     }
 
