@@ -39,6 +39,7 @@ export interface LiveStoreReadPilotStateSyncEngineOptions {
   mirror: LiveStoreStateMirror;
   enableBootstrapParityCheck?: boolean;
   enableCatchUpParityCheck?: boolean;
+  enableListMessagesParityCheck?: boolean;
 }
 
 export class LiveStoreReadPilotStateSyncEngine
@@ -51,12 +52,14 @@ export class LiveStoreReadPilotStateSyncEngine
   private readonly unsubscribeDelegate: () => void;
   private readonly enableBootstrapParityCheck: boolean;
   private readonly enableCatchUpParityCheck: boolean;
+  private readonly enableListMessagesParityCheck: boolean;
   private closed = false;
   private bootstrapSource: LiveStoreReadSource = "delegate";
   private catchUpSource: LiveStoreReadSource = "delegate";
   private listMessagesSource: LiveStoreReadSource = "delegate";
   private bootstrapParityState: "unknown" | "in-parity" | "drift" = "unknown";
   private catchUpParityState: "unknown" | "in-parity" | "drift" = "unknown";
+  private listMessagesParityState: "unknown" | "in-parity" | "drift" = "unknown";
 
   constructor(options: LiveStoreReadPilotStateSyncEngineOptions) {
     super();
@@ -64,6 +67,7 @@ export class LiveStoreReadPilotStateSyncEngine
     this.mirror = options.mirror;
     this.enableBootstrapParityCheck = options.enableBootstrapParityCheck ?? false;
     this.enableCatchUpParityCheck = options.enableCatchUpParityCheck ?? false;
+    this.enableListMessagesParityCheck = options.enableListMessagesParityCheck ?? false;
     this.unsubscribeDelegate = this.delegate.onStateEvent((event) => {
       this.emit("stateEvent", event);
       void this.mirror.mirrorStateEvent(event).catch((error) => {
@@ -138,6 +142,9 @@ export class LiveStoreReadPilotStateSyncEngine
   listMessages(raw: StateListMessagesInput): StateListMessagesResult {
     try {
       const result = this.mirror.debugListMessages(raw);
+      if (this.enableListMessagesParityCheck) {
+        this.checkListMessagesParity(raw, result);
+      }
       this.logReadSourceChange("state.listMessages", this.listMessagesSource, "livestore", {
         threadId: raw.threadId,
       });
@@ -155,6 +162,41 @@ export class LiveStoreReadPilotStateSyncEngine
       this.listMessagesSource = "delegate";
       return result;
     }
+  }
+
+  private checkListMessagesParity(
+    raw: StateListMessagesInput,
+    mirrorResult: StateListMessagesResult,
+  ): void {
+    let delegateResult: StateListMessagesResult;
+    try {
+      delegateResult = this.delegate.listMessages(raw);
+    } catch (error) {
+      this.logger.warn("list-messages parity check failed to read delegate listMessages", { error });
+      return;
+    }
+
+    const diffs = diffListMessagesResults(delegateResult, mirrorResult);
+    if (diffs.length === 0) {
+      if (this.listMessagesParityState !== "in-parity") {
+        this.listMessagesParityState = "in-parity";
+        this.logger.info("livestore read pilot list-messages parity check passed", {
+          threadId: raw.threadId,
+          offset: raw.offset ?? 0,
+          limit: raw.limit ?? 200,
+        });
+      }
+      return;
+    }
+
+    this.listMessagesParityState = "drift";
+    this.logger.warn("livestore read pilot list-messages parity drift detected", {
+      threadId: raw.threadId,
+      offset: raw.offset ?? 0,
+      limit: raw.limit ?? 200,
+      diffCount: diffs.length,
+      sampleDiffs: diffs.slice(0, 5),
+    });
   }
 
   catchUp(raw: StateCatchUpInput): StateCatchUpResult {
@@ -334,6 +376,43 @@ function diffCatchUpResults(expected: StateCatchUpResult, actual: StateCatchUpRe
     const actualPayload = JSON.stringify(actualEvent.payload);
     if (expectedPayload !== actualPayload) {
       diffs.push(`events[${index}].payload mismatch`);
+    }
+  }
+
+  return diffs;
+}
+
+function diffListMessagesResults(
+  expected: StateListMessagesResult,
+  actual: StateListMessagesResult,
+): string[] {
+  const diffs: string[] = [];
+
+  if (expected.total !== actual.total) {
+    diffs.push(`total mismatch: expected=${expected.total} actual=${actual.total}`);
+  }
+  if (expected.nextOffset !== actual.nextOffset) {
+    diffs.push(
+      `nextOffset mismatch: expected=${String(expected.nextOffset)} actual=${String(actual.nextOffset)}`,
+    );
+  }
+  if (expected.messages.length !== actual.messages.length) {
+    diffs.push(
+      `messages.length mismatch: expected=${expected.messages.length} actual=${actual.messages.length}`,
+    );
+  }
+
+  const minLength = Math.min(expected.messages.length, actual.messages.length);
+  for (let index = 0; index < minLength; index += 1) {
+    const expectedMessage = expected.messages[index];
+    const actualMessage = actual.messages[index];
+    if (!expectedMessage || !actualMessage) {
+      continue;
+    }
+    const expectedSerialized = JSON.stringify(expectedMessage);
+    const actualSerialized = JSON.stringify(actualMessage);
+    if (expectedSerialized !== actualSerialized) {
+      diffs.push(`messages[${index}] mismatch`);
     }
   }
 
