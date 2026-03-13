@@ -43,7 +43,31 @@ describe("connection-config", () => {
     ).toBe("wss://example.com/?token=abc123");
   });
 
-  it("rejects missing remote values in remote mode", () => {
+  it("allows remote mode without an auth token", () => {
+    expect(
+      validateDesktopConnectionSettings({
+        mode: "remote",
+        remoteUrl: "http://100.64.0.10:3773",
+        remoteAuthToken: "",
+      }),
+    ).toEqual({
+      mode: "remote",
+      remoteUrl: "http://100.64.0.10:3773/",
+      remoteAuthToken: "",
+    });
+  });
+
+  it("omits the token query param when no remote auth token is configured", () => {
+    expect(
+      buildDesktopRemoteWsUrl({
+        mode: "remote",
+        remoteUrl: "http://100.64.0.10:3773",
+        remoteAuthToken: "",
+      }),
+    ).toBe("ws://100.64.0.10:3773/");
+  });
+
+  it("rejects missing remote url in remote mode", () => {
     expect(() =>
       validateDesktopConnectionSettings({
         mode: "remote",
@@ -105,7 +129,15 @@ describe("connection-config", () => {
   });
 
   it("rejects incomplete tailscale launch args", () => {
-    expect(() => resolveDesktopConnectionSettingsFromArgs(["--tailscale", "100.64.0.10"])).toThrow(
+    expect(resolveDesktopConnectionSettingsFromArgs(["--tailscale", "100.64.0.10"])).toEqual({
+      mode: "remote",
+      remoteUrl: "http://100.64.0.10:3773/",
+      remoteAuthToken: "",
+    });
+  });
+
+  it("rejects a token without a remote url", () => {
+    expect(() => resolveDesktopConnectionSettingsFromArgs(["--token", "abc123"])).toThrow(
       DesktopConnectionConfigError,
     );
   });

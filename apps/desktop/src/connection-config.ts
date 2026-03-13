@@ -57,9 +57,6 @@ export function validateDesktopConnectionSettings(
   if (settings.remoteUrl.length === 0) {
     throw new DesktopConnectionConfigError("Remote URL is required.");
   }
-  if (settings.remoteAuthToken.length === 0) {
-    throw new DesktopConnectionConfigError("Remote auth token is required.");
-  }
 
   let remoteUrl: URL;
   try {
@@ -209,7 +206,9 @@ export function buildDesktopRemoteWsUrl(settings: DesktopConnectionSettings): st
   remoteUrl.protocol = remoteUrl.protocol === "https:" ? "wss:" : "ws:";
   remoteUrl.pathname = "/";
   remoteUrl.search = "";
-  remoteUrl.searchParams.set("token", validated.remoteAuthToken);
+  if (validated.remoteAuthToken.length > 0) {
+    remoteUrl.searchParams.set("token", validated.remoteAuthToken);
+  }
   remoteUrl.hash = "";
   return remoteUrl.toString();
 }
