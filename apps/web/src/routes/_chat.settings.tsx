@@ -268,6 +268,61 @@ function SettingsRouteView() {
     [settings, updateSettings],
   );
 
+  const connectionSection = isElectron ? (
+    <section className="rounded-2xl border border-border bg-card p-5">
+      <div className="mb-4">
+        <h2 className="text-sm font-medium text-foreground">Connection</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Paste a remote T3 connection URL to use a VPS or Tailnet host. Leave the field blank to
+          keep using the bundled local server. The saved connection is remembered on this device
+          until you change it.
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <label className="text-xs font-medium text-foreground" htmlFor="desktop-remote-url">
+            Connection URL
+          </label>
+          <Input
+            id="desktop-remote-url"
+            placeholder="http://100.x.y.z:3773/?token=..."
+            value={connectionUrlInput}
+            onChange={(event) => setConnectionUrlInput(event.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Paste the remote T3 URL. If the server uses auth, include the <code>token</code> query
+            parameter. Clear the field and save to switch back to the local bundled server.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+          Current mode:{" "}
+          <span className="font-medium text-foreground">
+            {connectionSettings?.mode === "remote" ? "Remote" : "Local"}
+          </span>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2">
+          <p className="text-xs text-muted-foreground">
+            Save changes, then restart the desktop app to reconnect. Your connection details stay
+            saved on this machine.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!connectionSettings || isSavingConnection}
+            onClick={saveConnectionSettings}
+          >
+            {isSavingConnection ? "Restarting..." : "Save and restart"}
+          </Button>
+        </div>
+
+        {connectionError ? <p className="text-xs text-destructive">{connectionError}</p> : null}
+      </div>
+    </section>
+  ) : null;
+
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
@@ -287,64 +342,6 @@ function SettingsRouteView() {
                 Configure app-level preferences for this device.
               </p>
             </header>
-
-            {isElectron ? (
-              <section className="rounded-2xl border border-border bg-card p-5">
-                <div className="mb-4">
-                  <h2 className="text-sm font-medium text-foreground">Connection</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Paste a remote T3 connection URL to use a VPS or Tailnet host. Leave the field
-                    blank to keep using the bundled local server. The saved connection is remembered
-                    on this device until you change it.
-                  </p>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-foreground" htmlFor="desktop-remote-url">
-                      Connection URL
-                    </label>
-                    <Input
-                      id="desktop-remote-url"
-                      placeholder="http://100.x.y.z:3773/?token=..."
-                      value={connectionUrlInput}
-                      onChange={(event) => setConnectionUrlInput(event.target.value)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Paste the remote T3 URL. If the server uses auth, include the{" "}
-                      <code>token</code> query parameter. Clear the field and save to switch back to
-                      the local bundled server.
-                    </p>
-                  </div>
-
-                  <div className="rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-                    Current mode:{" "}
-                    <span className="font-medium text-foreground">
-                      {connectionSettings?.mode === "remote" ? "Remote" : "Local"}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2">
-                    <p className="text-xs text-muted-foreground">
-                      Save changes, then restart the desktop app to reconnect. Your connection
-                      details stay saved on this machine.
-                    </p>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={!connectionSettings || isSavingConnection}
-                      onClick={saveConnectionSettings}
-                    >
-                      {isSavingConnection ? "Restarting..." : "Save and restart"}
-                    </Button>
-                  </div>
-
-                  {connectionError ? (
-                    <p className="text-xs text-destructive">{connectionError}</p>
-                  ) : null}
-                </div>
-              </section>
-            ) : null}
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
@@ -628,6 +625,8 @@ function SettingsRouteView() {
                 })}
               </div>
             </section>
+
+            {connectionSection}
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">

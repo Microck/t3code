@@ -26,7 +26,12 @@ import { Server } from "./wsServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
-import { buildRemoteConnectUrl, formatHostForUrl, isWildcardHost } from "./remote-access";
+import {
+  buildRemoteConnectUrl,
+  formatHostForUrl,
+  formatRemoteStartupMessage,
+  isWildcardHost,
+} from "./remote-access";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -275,12 +280,13 @@ const makeServerProgram = (input: CliInput) =>
     });
 
     if (resolveRemoteFlag(input)) {
-      yield* Effect.logInfo("Desktop connection URL", {
-        url: remoteConnectUrl,
-        hint:
-          remoteConnectUrl === null
-            ? `Unable to auto-detect a reachable IP. Use http://<reachable-host>:${config.port}/ manually.`
-            : undefined,
+      yield* Effect.sync(() => {
+        console.log(
+          formatRemoteStartupMessage({
+            connectUrl: remoteConnectUrl,
+            port: config.port,
+          }),
+        );
       });
     }
 

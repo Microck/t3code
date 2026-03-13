@@ -6,6 +6,11 @@ export interface RemoteConnectUrlInput {
   readonly authToken: string | undefined;
 }
 
+export interface RemoteStartupMessageInput {
+  readonly connectUrl: string | null;
+  readonly port: number;
+}
+
 type NetworkInterfaces = ReturnType<typeof OS.networkInterfaces>;
 
 function normalizeFamily(value: string | number): "IPv4" | "IPv6" | null {
@@ -89,4 +94,21 @@ export function buildRemoteConnectUrl(
     url.searchParams.set("token", input.authToken.trim());
   }
   return url.toString();
+}
+
+export function formatRemoteStartupMessage(input: RemoteStartupMessageInput): string {
+  const fallbackUrl = `http://<reachable-host>:${input.port}/`;
+  const url = input.connectUrl ?? fallbackUrl;
+  const lines = [
+    "",
+    "Paste this into the desktop app's Connection URL field:",
+    url,
+  ];
+
+  if (input.connectUrl === null) {
+    lines.push(`Replace <reachable-host> with your VPS IP or Tailscale IP.`);
+  }
+
+  lines.push("");
+  return lines.join("\n");
 }

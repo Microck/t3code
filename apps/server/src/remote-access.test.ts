@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildRemoteConnectUrl,
   detectPreferredRemoteHost,
+  formatRemoteStartupMessage,
   isTailscaleAddress,
 } from "./remote-access";
 
@@ -66,5 +67,23 @@ describe("remote-access", () => {
         },
       ),
     ).toBe("http://100.88.10.4:3773/");
+  });
+
+  it("formats a clean startup message when a remote url is available", () => {
+    expect(
+      formatRemoteStartupMessage({
+        connectUrl: "http://100.88.10.4:3773/",
+        port: 3773,
+      }),
+    ).toContain("Paste this into the desktop app's Connection URL field:");
+  });
+
+  it("formats a fallback startup message when no remote host can be detected", () => {
+    expect(
+      formatRemoteStartupMessage({
+        connectUrl: null,
+        port: 4010,
+      }),
+    ).toContain("http://<reachable-host>:4010/");
   });
 });
