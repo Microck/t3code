@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
-import { type ProviderKind } from "@t3tools/contracts";
+import { useCallback, useEffect, useState } from "react";
+import { type DesktopConnectionSettings, type ProviderKind } from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
@@ -98,6 +98,11 @@ function SettingsRouteView() {
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
+  const [connectionSettings, setConnectionSettings] = useState<DesktopConnectionSettings | null>(
+    null,
+  );
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [isSavingConnection, setIsSavingConnection] = useState(false);
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
   >({
@@ -111,6 +116,32 @@ function SettingsRouteView() {
   const codexHomePath = settings.codexHomePath;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
+
+  useEffect(() => {
+    if (!isElectron || !window.desktopBridge?.getConnectionSettings) {
+      return;
+    }
+
+    let cancelled = false;
+    void window.desktopBridge
+      .getConnectionSettings()
+      .then((nextSettings) => {
+        if (!cancelled) {
+          setConnectionSettings(nextSettings);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setConnectionError(
+            error instanceof Error ? error.message : "Unable to load desktop connection settings.",
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const openKeybindingsFile = useCallback(() => {
     if (!keybindingsConfigPath) return;
@@ -134,6 +165,28 @@ function SettingsRouteView() {
         setIsOpeningKeybindings(false);
       });
   }, [availableEditors, keybindingsConfigPath]);
+
+  const saveConnectionSettings = useCallback(() => {
+    if (!window.desktopBridge?.saveConnectionSettings || !window.desktopBridge.restartApp) {
+      return;
+    }
+    if (!connectionSettings) {
+      setConnectionError("Desktop connection settings are still loading.");
+      return;
+    }
+
+    setConnectionError(null);
+    setIsSavingConnection(true);
+    void window.desktopBridge
+      .saveConnectionSettings(connectionSettings)
+      .then(() => window.desktopBridge?.restartApp?.())
+      .catch((error) => {
+        setConnectionError(
+          error instanceof Error ? error.message : "Unable to save desktop connection settings.",
+        );
+        setIsSavingConnection(false);
+      });
+  }, [connectionSettings]);
 
   const addCustomModel = useCallback(
     (provider: ProviderKind) => {
@@ -218,6 +271,135 @@ function SettingsRouteView() {
                 Configure app-level preferences for this device.
               </p>
             </header>
+
+            {isElectron ? (
+              <section className="rounded-2xl border border-border bg-card p-5">
+                <div className="mb-4">
+                  <h2 className="text-sm font-medium text-foreground">Connection</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Switch between the bundled local server and a remote T3 server. The saved
+                    connection is remembered on this device until you change it.
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                        connectionSettings?.mode === "local"
+                          ? "border-primary/60 bg-primary/8 text-foreground"
+                          : "border-border bg-background text-muted-foreground hover:bg-accent"
+                      }`}
+                      onClick={() =>
+                        setConnectionSettings((prev) => ({
+                          ...(prev ?? {
+                            mode: "local",
+                            remoteUrl: "",
+                            remoteAuthToken: "",
+                          }),
+                          mode: "local",
+                        }))
+                      }
+                    >
+                      <div className="text-sm font-medium">Local</div>
+                      <div className="mt-1 text-xs">Start the bundled T3 backend on this machine.</div>
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                        connectionSettings?.mode === "remote"
+                          ? "border-primary/60 bg-primary/8 text-foreground"
+                          : "border-border bg-background text-muted-foreground hover:bg-accent"
+                      }`}
+                      onClick={() =>
+                        setConnectionSettings((prev) => ({
+                          ...(prev ?? {
+                            mode: "remote",
+                            remoteUrl: "",
+                            remoteAuthToken: "",
+                          }),
+                          mode: "remote",
+                        }))
+                      }
+                    >
+                      <div className="text-sm font-medium">Remote</div>
+                      <div className="mt-1 text-xs">
+                        Connect to a VPS or Tailnet host already running T3 Code.
+                      </div>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-foreground" htmlFor="desktop-remote-url">
+                      Remote URL
+                    </label>
+                    <Input
+                      id="desktop-remote-url"
+                      placeholder="http://100.x.y.z:3773"
+                      value={connectionSettings?.remoteUrl ?? ""}
+                      onChange={(event) =>
+                        setConnectionSettings((prev) => ({
+                          ...(prev ?? {
+                            mode: "remote",
+                            remoteUrl: "",
+                            remoteAuthToken: "",
+                          }),
+                          remoteUrl: event.target.value,
+                        }))
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Use the reachable HTTP or HTTPS address of the remote T3 server.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-foreground" htmlFor="desktop-remote-token">
+                      Remote auth token
+                    </label>
+                    <Input
+                      id="desktop-remote-token"
+                      type="password"
+                      placeholder="Required in remote mode"
+                      value={connectionSettings?.remoteAuthToken ?? ""}
+                      onChange={(event) =>
+                        setConnectionSettings((prev) => ({
+                          ...(prev ?? {
+                            mode: "remote",
+                            remoteUrl: "",
+                            remoteAuthToken: "",
+                          }),
+                          remoteAuthToken: event.target.value,
+                        }))
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      This should match the token used to start the remote T3 server.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2">
+                    <p className="text-xs text-muted-foreground">
+                      Save changes, then restart the desktop app to reconnect. Your connection
+                      details stay saved on this machine.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!connectionSettings || isSavingConnection}
+                      onClick={saveConnectionSettings}
+                    >
+                      {isSavingConnection ? "Restarting..." : "Save and restart"}
+                    </Button>
+                  </div>
+
+                  {connectionError ? (
+                    <p className="text-xs text-destructive">{connectionError}</p>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
