@@ -664,6 +664,36 @@ describe("preferGitForWindowsBinary", () => {
 });
 
 effectIt.layer(NodeServices.layer)("resolveSpawnCommand", (it) => {
+  it.effect(
+    "searches Windows PATH past missing paths and directories and discovers a command after a miss",
+    () =>
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) !== "win32") return;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-spawn-lookup-" });
+        const first = path.join(root, "first");
+        const last = path.join(root, "last");
+        yield* fs.makeDirectory(first);
+        yield* fs.makeDirectory(last);
+        yield* fs.makeDirectory(path.join(first, "available.exe"));
+        const notDirectory = path.join(root, "file");
+        yield* fs.writeFileString(notDirectory, "not a PATH directory");
+        const env = {
+          PATH: [path.join(root, "missing"), notDirectory, first, last].join(";"),
+          PATHEXT: ".EXE",
+        };
+
+        expect((yield* resolveSpawnCommand("available", [], { env })).command).toBe("available");
+        const executable = path.join(last, "available.exe");
+        yield* fs.writeFileString(executable, "fixture");
+        const resolved = yield* resolveSpawnCommand("available", ["argument"], { env });
+        expect(resolved.command.toLowerCase()).toBe(executable.toLowerCase());
+        expect(resolved.args).toEqual(["argument"]);
+        expect(resolved.shell).toBe(false);
+      }).pipe(Effect.provideService(CommandResolutionCache, new Map())),
+  );
+
   it.effect("runs Windows executables directly without a shell", () =>
     Effect.gen(function* () {
       const command = yield* resolveSpawnCommand("node.exe", ["script.js", "hello & goodbye"], {

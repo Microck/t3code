@@ -90,7 +90,8 @@ function resolveSpawnExecutableWithNode(
   );
   const isExecutable = (candidate: string) => {
     try {
-      if (!NodeFS.statSync(candidate).isFile()) return false;
+      // Missing PATH candidates are normal; do not allocate an Error for each one.
+      if (!NodeFS.statSync(candidate, { throwIfNoEntry: false })?.isFile()) return false;
       if (platform === "win32") {
         return windowsPathExtensions.includes(path.extname(candidate).toUpperCase());
       }
