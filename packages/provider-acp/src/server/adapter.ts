@@ -1002,6 +1002,56 @@ function selectAutoApprovedPermissionOption(
   );
 }
 
+export function acpElicitationQuestions(
+  properties: Record<string, unknown>,
+  message: string,
+): OrchestrationV2UserInputQuestion[] {
+  return Object.entries(properties).map(([id, property], index) => {
+    const record = unknownRecord(property);
+    const multiSelect = record?.type === "array";
+    const choices = multiSelect ? unknownRecord(record.items) : record;
+    const enumValues = Array.isArray(choices?.enum)
+      ? choices.enum.filter((value): value is string => typeof value === "string")
+      : [];
+    const titledChoices = multiSelect ? choices?.anyOf : choices?.oneOf;
+    const titledOptions = Array.isArray(titledChoices)
+      ? titledChoices.flatMap((choice) => {
+          const option = unknownRecord(choice);
+          if (typeof option?.const !== "string") return [];
+          const label = nonEmptyText(
+            option.title,
+            option.const.trim() ? option.const : JSON.stringify(option.const),
+          );
+          return [
+            {
+              label,
+              value: option.const,
+              description: nonEmptyText(option.description, label),
+            },
+          ];
+        })
+      : [];
+    const options =
+      enumValues.length > 0
+        ? enumValues.map((value) => ({ label: value, description: value }))
+        : titledOptions.length > 0
+          ? titledOptions
+          : record?.type === "boolean"
+            ? [
+                { label: "true", description: "Yes" },
+                { label: "false", description: "No" },
+              ]
+            : [];
+    return {
+      id,
+      header: nonEmptyText(record?.title, `Question ${index + 1}`),
+      question: nonEmptyText(record?.description, message),
+      options,
+      ...(multiSelect ? { multiSelect: true } : {}),
+    };
+  });
+}
+
 function elicitationContent(
   answers: ProviderUserInputAnswers,
   allowedKeys: ReadonlySet<string>,
@@ -6231,30 +6281,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               const elicitationScopeId =
                 "sessionId" in params ? params.sessionId : `request:${params.requestId}`;
               const questions =
-                nativeForm?.questions ??
-                Object.entries(properties).map(
-                  ([id, property], index): OrchestrationV2UserInputQuestion => {
-                    const record = unknownRecord(property);
-                    const enumValues = Array.isArray(record?.enum)
-                      ? record.enum.filter((value): value is string => typeof value === "string")
-                      : [];
-                    const options =
-                      enumValues.length > 0
-                        ? enumValues.map((value) => ({ label: value, description: value }))
-                        : record?.type === "boolean"
-                          ? [
-                              { label: "true", description: "Yes" },
-                              { label: "false", description: "No" },
-                            ]
-                          : [];
-                    return {
-                      id,
-                      header: nonEmptyText(record?.title, `Question ${index + 1}`),
-                      question: nonEmptyText(record?.description, params.message),
-                      options,
-                    };
-                  },
-                );
+                nativeForm?.questions ?? acpElicitationQuestions(properties, params.message);
               const userInput = yield* requestUserInputWithAdmission(
                 handlerGeneration,
                 Effect.gen(function* () {
