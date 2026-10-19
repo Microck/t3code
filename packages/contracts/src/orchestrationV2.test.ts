@@ -12,9 +12,12 @@ import {
   OrchestrationV2Subagent,
   OrchestrationV2SubagentJson,
   OrchestrationV2ThreadHistoryPage,
+  OrchestrationV2UserInputQuestion,
   OrchestrationV2TurnItem,
   OrchestrationV2TurnItemJson,
 } from "./orchestrationV2.ts";
+
+import { UserInputQuestion } from "./providerRuntime.ts";
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
 
@@ -34,6 +37,17 @@ const decodeOrchestrationV2ProviderCapabilities = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  it("preserves required flags across provider and orchestration question schemas", () => {
+    const question = { id: "editor", header: "Message", question: "Edit message", options: [] };
+    for (const schema of [UserInputQuestion, OrchestrationV2UserInputQuestion]) {
+      const decode = Schema.decodeUnknownSync(schema);
+      expect(decode(question).required).toBeUndefined();
+      for (const required of [false, true]) {
+        expect(decode({ ...question, required }).required).toBe(required);
+      }
+    }
+  });
+
   it("decodes thread event types from a newer server as skippable items", () => {
     const decodeWireItems = Schema.decodeUnknownSync(
       Schema.toCodecJson(Schema.Array(OrchestrationV2RpcSchemas.subscribeThread.output)),
