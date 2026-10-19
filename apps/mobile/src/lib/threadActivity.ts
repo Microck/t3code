@@ -1923,8 +1923,11 @@ export function buildPendingUserInputAnswers(
   const answers: Record<string, string | ReadonlyArray<string>> = {};
 
   for (const question of questions) {
-    const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
+    const draft = draftAnswers[question.id];
+    const answer = resolvePendingUserInputAnswer(question, draft);
     if (answer === null) {
+      // Blocked attachments still hold the reply back, even on an optional question.
+      if (question.required === false && !draft?.attachmentsBlocked) continue;
       return null;
     }
     answers[question.id] = answer;
