@@ -37,6 +37,7 @@ const emitElicitation = process.env.T3_ACP_EMIT_ELICITATION === "1";
 const emitMcpToolApprovalElicitation =
   process.env.T3_ACP_EMIT_MCP_TOOL_APPROVAL_ELICITATION === "1";
 const emitUrlElicitation = process.env.T3_ACP_EMIT_URL_ELICITATION === "1";
+const emitOptionalFieldElicitation = process.env.T3_ACP_EMIT_OPTIONAL_FIELD_ELICITATION === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
 const emitXAiExitPlanMode = process.env.T3_ACP_EMIT_XAI_EXIT_PLAN_MODE === "1";
 const emitXAiPlanMdWrite = process.env.T3_ACP_EMIT_XAI_PLAN_MD_WRITE === "1";
@@ -1966,6 +1967,23 @@ const program = Effect.gen(function* () {
           ...(emitMcpToolApprovalElicitation
             ? { _meta: { codex_approval_kind: "mcp_tool_call" } }
             : {}),
+        });
+        return yield* finishPrompt(requestedSessionId, "end_turn");
+      }
+
+      if (emitOptionalFieldElicitation) {
+        yield* agent.client.elicit({
+          sessionId: requestedSessionId,
+          message: "Pick a color",
+          mode: "form",
+          requestedSchema: {
+            type: "object",
+            properties: {
+              color: { type: "string", title: "Color", enum: ["red", "blue"] },
+              note: { type: "string", title: "Note" },
+            },
+            required: ["color"],
+          },
         });
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
