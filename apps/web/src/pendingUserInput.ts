@@ -153,6 +153,14 @@ export function togglePendingUserInputOptionSelection(
   };
 }
 
+// Blocked attachments still hold the reply back, even on an optional question.
+function canSkipPendingUserInputQuestion(
+  question: UserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined,
+): boolean {
+  return question.required === false && !draft?.attachmentsBlocked;
+}
+
 export function buildPendingUserInputAnswers(
   questions: ReadonlyArray<UserInputQuestion>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
@@ -160,8 +168,10 @@ export function buildPendingUserInputAnswers(
   const answers: Record<string, string | string[]> = {};
 
   for (const question of questions) {
-    const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
+    const draft = draftAnswers[question.id];
+    const answer = resolvePendingUserInputAnswer(question, draft);
     if (answer === null) {
+      if (canSkipPendingUserInputQuestion(question, draft)) continue;
       return null;
     }
     answers[question.id] = answer;
@@ -211,6 +221,8 @@ export function derivePendingUserInputProgress(
     answeredQuestionCount,
     isLastQuestion,
     isComplete: buildPendingUserInputAnswers(questions, draftAnswers) !== null,
-    canAdvance: resolvedAnswer !== null,
+    canAdvance:
+      resolvedAnswer !== null ||
+      (activeQuestion !== null && canSkipPendingUserInputQuestion(activeQuestion, activeDraft)),
   };
 }
