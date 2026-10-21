@@ -31,14 +31,17 @@ jobs:
       branch: ${{ steps.prepare.outputs.branch }}
       version: ${{ steps.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+      # Use upstream's manual checkout: checkout@v6's auth cleanup recursively
+      # inspects vendored gitlinks that intentionally have no .gitmodules URL.
+      - name: Checkout automation
+        env:
+          SOURCE: ${{ github.sha }}
+        run: |
+          git init .
+          git remote add origin https://github.com/Microck/t3code.git
+          git fetch --no-tags --depth=1 origin "$SOURCE"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -75,14 +78,15 @@ jobs:
       T3CODE_RELAY_URL: https://relay.t3.codes
       T3CODE_DESKTOP_UPDATE_REPOSITORY: Microck/t3code
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.prepare.outputs.source }}
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+      - name: Checkout prepared source
+        env:
+          SOURCE: ${{ needs.prepare.outputs.source }}
+        run: |
+          git init .
+          git remote add origin https://github.com/Microck/t3code.git
+          git fetch --no-tags --depth=1 origin "$SOURCE"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
       - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
