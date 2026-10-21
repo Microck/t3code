@@ -1,11 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import { PROVIDER_DISPLAY_NAMES } from "@t3tools/contracts";
 
+import { cliReleaseHasArchive } from "@t3tools/shared/cliRelease";
+
 import { APP_VERSION } from "~/branding";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isElectron } from "~/env";
 import { useEnvironments } from "~/state/environments";
-import { useNpmReleasePublished } from "~/state/npmRelease";
+import { useCliReleaseAssets } from "~/state/cli-release";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { environmentUpdateStatesAtom } from "~/state/server";
 import { environmentSessionStatesAtom } from "~/state/session";
@@ -58,13 +60,21 @@ export function useUpdateEverything(localUpdateVersion: string | null) {
     machines,
     targetVersion,
   );
-  // A desktop-managed server installs from its own app's update feed, so only
-  // servers that download t3 from npm wait for npm to publish the version.
-  const needsNpm = behindServers.some((server) => server.selfUpdate !== "desktop-managed");
-  const published = useNpmReleasePublished(needsNpm ? targetVersion : null);
-  const servers = published
-    ? behindServers
-    : behindServers.filter((server) => server.selfUpdate === "desktop-managed");
+  // Desktop apps follow their own update feed. Standalone servers download archives
+  // from this build's distribution, which may be a fork with no npm package.
+  const needsArchive = behindServers.some((server) => server.selfUpdate !== "desktop-managed");
+  const assets = useCliReleaseAssets(needsArchive ? targetVersion : null);
+  const servers = behindServers.filter((server) => {
+    if (server.selfUpdate === "desktop-managed") return true;
+    const config = machines.find(
+      (machine) => machine.environmentId === server.environmentId,
+    )?.serverConfig;
+    return (
+      config !== null &&
+      config !== undefined &&
+      cliReleaseHasArchive(assets, targetVersion, config.environment.platform)
+    );
+  });
   const skipped: ReadonlyArray<SkippedMachine> = [
     ...unreachable,
     ...behindServers
@@ -72,7 +82,7 @@ export function useUpdateEverything(localUpdateVersion: string | null) {
       .map((server) => ({
         environmentId: server.environmentId,
         label: server.serverLabel,
-        reason: `t3@${targetVersion} is not on npm yet`,
+        reason: `No published ${targetVersion} archive for this machine in this distribution`,
       })),
   ];
   const restarts = collectRestartingMachines(machines, servers, localUpdateVersion !== null);
