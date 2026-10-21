@@ -1,6 +1,9 @@
 import { type CSSProperties, memo } from "react";
 
 import {
+  ompModelIcon,
+  GEMINI_ICON_PATH,
+  MODEL_ICON_LABELS,
   normalizeProviderAccentColor,
   providerAccentForegroundColor,
   providerInstanceInitials,
@@ -59,6 +62,7 @@ export function resolveProviderInstanceAcpRegistryIconUrl(input: {
 
 export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   driverKind: ProviderDriverKind;
+  ompModel?: string | undefined;
   displayName: string;
   accentColor?: string | undefined;
   acpRegistryAgentId?: string | undefined;
@@ -72,8 +76,11 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   statusDotClassName?: string;
   indicatorBackground?: string;
 }) {
-  const Icon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
-  const packageIcon = providerClients.get(props.driverKind)?.icon;
+  const modelIcon = ompModelIcon(props.ompModel);
+  const iconDriver =
+    modelIcon && modelIcon !== "gemini" ? ProviderDriverKind.make(modelIcon) : props.driverKind;
+  const Icon = PROVIDER_ICON_BY_PROVIDER[iconDriver] ?? null;
+  const packageIcon = providerClients.get(iconDriver)?.icon;
   const indicatorBackground = props.indicatorBackground ?? "var(--card)";
   const accentColor = normalizeProviderAccentColor(props.accentColor);
   const accentStyle = accentColor
@@ -99,8 +106,19 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
       )}
       style={accentStyle}
       data-provider-accent-color={accentColor}
+      role={modelIcon ? "img" : undefined}
+      aria-label={modelIcon ? `${MODEL_ICON_LABELS[modelIcon]} model` : undefined}
     >
-      {isAcpRegistry ? (
+      {modelIcon === "gemini" ? (
+        <svg
+          viewBox="0 0 24 24"
+          fill="currentColor"
+          aria-hidden
+          className={cn("size-5 shrink-0", iconClassName)}
+        >
+          <path d={GEMINI_ICON_PATH} />
+        </svg>
+      ) : isAcpRegistry && !modelIcon ? (
         <AcpRegistryAgentIcon
           className={cn("size-5 rounded-none bg-transparent", iconClassName)}
           fallbackClassName="size-full"

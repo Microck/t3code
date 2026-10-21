@@ -1181,6 +1181,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             ))}
             <ProviderInstanceIcon
               iconUrl={providerIconUrl}
+              ompModel={providerInstance.isOmp ? thread.modelSelection.model : undefined}
               provider={providerInstance.driverKind}
               size={14}
               displayName={providerInstance.displayName}

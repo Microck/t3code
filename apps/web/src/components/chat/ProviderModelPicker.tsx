@@ -219,6 +219,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                   selection.entry ? (
                     <ProviderInstanceIcon
                       key={`${selection.instanceId}:${selection.model}`}
+                      ompModel={selection.entry.isOmp ? selection.model : undefined}
                       driverKind={selection.entry.driverKind}
                       displayName={selection.entry.displayName}
                       accentColor={selection.entry.accentColor}
@@ -235,6 +236,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             </span>
           ) : activeEntry && props.triggerLabel === undefined ? (
             <ProviderInstanceIcon
+              ompModel={activeEntry.isOmp ? props.model : undefined}
               driverKind={activeEntry.driverKind}
               displayName={activeEntry.displayName}
               accentColor={activeEntry.accentColor}
