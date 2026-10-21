@@ -75,6 +75,10 @@ import {
   toolCallLines,
   turnItemOutputImages,
   turnItemOutputText,
+  readOmpTaskProgress,
+  ompAgentMetrics,
+  ompAgentStatus,
+  type OmpTaskProgress,
 } from "@t3tools/client-runtime/work-log/item-detail";
 import { useTurnItemDetail } from "../../state/queries";
 import {
@@ -1002,21 +1006,25 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
       : null;
   const outputImages = expanded && fetchedItem ? turnItemOutputImages(fetchedItem) : [];
   const viewedImagePath = workEntryViewedImagePath(row.workEntry);
+  const ompTask =
+    expanded && shownItem.type === "dynamic_tool" ? readOmpTaskProgress(shownItem.output) : null;
   const fetchedOutput =
     !expanded || streamsOutput
       ? null
-      : shownItem.type === "file_search" || shownItem.type === "web_search"
-        ? turnItemOutputText(shownItem)
-        : fetchedItem
-          ? (turnItemOutputText(fetchedItem) ??
-            (outputImages.length > 0 || viewedImagePath ? null : "No output."))
-          : fetchedDetail.error
-            ? `Couldn't load output: ${fetchedDetail.error}`
-            : row.fetchesDetail
-              ? fetchedDetail.data
-                ? "Output is no longer available."
-                : "Loading output…"
-              : null;
+      : ompTask
+        ? ompTask.text
+        : shownItem.type === "file_search" || shownItem.type === "web_search"
+          ? turnItemOutputText(shownItem)
+          : fetchedItem
+            ? (turnItemOutputText(fetchedItem) ??
+              (outputImages.length > 0 || viewedImagePath ? null : "No output."))
+            : fetchedDetail.error
+              ? `Couldn't load output: ${fetchedDetail.error}`
+              : row.fetchesDetail
+                ? fetchedDetail.data
+                  ? "Output is no longer available."
+                  : "Loading output…"
+                : null;
   const exitLine =
     failedExitCode === null ? null : (
       <Text className="mt-1.5 font-mono text-2xs leading-normal text-danger-foreground">
@@ -1171,6 +1179,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
       {expanded &&
       (reasoning ||
         fullDetail ||
+        ompTask ||
         call ||
         fetchedOutput ||
         viewedImagePath ||
@@ -1258,6 +1267,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
                 {fullDetail}
               </Text>
             ) : null}
+            {ompTask ? <OmpTaskProgressRows progress={ompTask} /> : null}
             {fetchedOutput ? (
               <Text
                 selectable
@@ -1664,4 +1674,78 @@ function toolGroupSummarySymbolName(kind: ToolGroupSummaryKind): AppSymbolName {
     case "mixed":
       return { ios: "hammer", android: "construction" };
   }
+}
+
+function OmpTaskProgressRows({ progress }: { readonly progress: OmpTaskProgress }) {
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  return (
+    <View className="gap-2 py-1" accessibilityLabel="Task agents">
+      {progress.agents.map((agent) => {
+        const open = expanded.has(agent.id);
+        return (
+          <View key={agent.id} className="gap-1">
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: open }}
+              accessibilityLabel={`${agent.id}, ${ompAgentStatus(agent)}`}
+              onPress={() =>
+                setExpanded((current) => {
+                  const next = new Set(current);
+                  if (next.has(agent.id)) next.delete(agent.id);
+                  else next.add(agent.id);
+                  return next;
+                })
+              }
+            >
+              <Text className="py-1 font-t3-medium text-2xs text-foreground">
+                {open ? "▾" : "▸"} {agent.id} · {agent.agent} · {ompAgentStatus(agent)}
+                {agent.currentTool ? ` · ${agent.currentTool}` : ""}
+              </Text>
+            </Pressable>
+            {open ? (
+              <View className="gap-1 pl-3">
+                <Text selectable className="text-2xs text-foreground">
+                  {agent.description ?? agent.assignment ?? agent.task}
+                </Text>
+                {agent.resolvedModel ? (
+                  <Text selectable className="text-2xs text-foreground-muted">
+                    {agent.resolvedModel}
+                  </Text>
+                ) : null}
+                <Text className="text-2xs text-foreground-muted">{ompAgentMetrics(agent)}</Text>
+                {agent.retryState ? (
+                  <Text selectable className="text-2xs text-danger-foreground">
+                    {agent.retryState.errorMessage}
+                  </Text>
+                ) : null}
+                {agent.currentTool ? (
+                  <Text selectable className="font-mono text-2xs text-foreground">
+                    Current tool: {agent.currentTool} {agent.currentToolArgs}
+                  </Text>
+                ) : null}
+                {agent.recentTools.map((tool) => (
+                  <Text
+                    key={`${tool.endMs}:${tool.tool}`}
+                    selectable
+                    className={
+                      tool.isError
+                        ? "font-mono text-2xs text-danger-foreground"
+                        : "font-mono text-2xs text-foreground-muted"
+                    }
+                  >
+                    {tool.tool} {tool.args}
+                  </Text>
+                ))}
+                {agent.recentOutput.length ? (
+                  <Text selectable className="font-mono text-2xs text-foreground-muted">
+                    {agent.recentOutput.join("\n")}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+        );
+      })}
+    </View>
+  );
 }
