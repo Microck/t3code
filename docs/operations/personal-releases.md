@@ -20,6 +20,8 @@ usage blocking enabled. These were verified during setup. Exhausting the
 included allowance must stop the workflow, not enable paid overage. The workflow
 uses standard GitHub-hosted runners on this public repository, with one
 ten-minute Copilot attempt per conflicted fix and no automatic model retries.
+Intermediate Actions artifacts are deleted when the run finishes; installers
+and update metadata remain attached to the published release.
 
 The workflow builds Windows x64 desktop, Linux x64 (for its embedded WSL
 runtime), and Linux ARM64 (for Ashburn). It reuses upstream's packaging and smoke

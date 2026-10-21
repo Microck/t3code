@@ -61,6 +61,7 @@ jobs:
         if: steps.prepare.outputs.build == 'true'
         with:
           name: personal-release-notes
+          retention-days: 1
           path: |
             ${{ runner.temp }}/personal-release-notes.md
             ${{ runner.temp }}/return-to-official.*
@@ -107,6 +108,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: js-bundle
+          retention-days: 1
           path: |
             apps/server/dist
             apps/desktop/dist-electron
@@ -221,6 +223,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      actions: write
       contents: write
       issues: write
     steps:
@@ -230,6 +233,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
           BRANCH: ${{ needs.prepare.outputs.branch }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
         shell: bash
         run: |
           if jq -e 'any(.[]; .result == "failure" || .result == "cancelled")' <<< "$RESULTS" >/dev/null; then
@@ -243,3 +247,8 @@ jobs:
           if [[ "$BRANCH" == personal-build/* ]]; then
             gh api --method DELETE "repos/Microck/t3code/git/refs/heads/$BRANCH"
           fi
+          # Release assets are permanent; intermediate Actions artifacts are not needed after the run.
+          gh api "repos/Microck/t3code/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].id' |
+            while read -r artifact; do
+              gh api --method DELETE "repos/Microck/t3code/actions/artifacts/$artifact"
+            done
