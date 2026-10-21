@@ -6,6 +6,10 @@ import type {
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import {
+  isActiveBackgroundTurnItem,
+  turnItemUpdateCanEndBackgroundWork,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
   createOrchestrationV2TurnItemVisibility,
   isOrchestrationV2TurnItemVisible,
 } from "@t3tools/shared/orchestrationV2Timeline";
@@ -319,12 +323,18 @@ export function applyOrchestrationV2ProjectionEvent(
       while (itemIndex >= 0 && projection.turnItems[itemIndex]!.id !== event.payload.id) {
         itemIndex -= 1;
       }
-      if (
+      const belowWindow =
         partialTimeline &&
-        itemIndex === -1 &&
-        shouldDropMissingPartialTurnItem(projection, event.payload, latestLocalTurnOrdinal)
-      ) {
-        return projection;
+        (itemIndex === -1 || turnItemUpdateCanEndBackgroundWork(event.payload)) &&
+        shouldDropMissingPartialTurnItem(projection, event.payload, latestLocalTurnOrdinal);
+      // Active work remains available to the waiting bar without returning it to the timeline.
+      if (belowWindow) {
+        if (isActiveBackgroundTurnItem(event.payload)) {
+          return { ...base, turnItems: upsertEntity(base.turnItems, event.payload) };
+        }
+        return itemIndex !== -1
+          ? { ...base, turnItems: base.turnItems.filter((item) => item.id !== event.payload.id) }
+          : projection;
       }
       const turnItems = [...projection.turnItems];
       if (itemIndex === -1) turnItems.push(event.payload);
