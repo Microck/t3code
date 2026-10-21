@@ -3107,7 +3107,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               data: { content },
             };
           }
-          const merged = mergeToolCallState(previous, toolCall);
+          const mergedToolCall = mergeToolCallState(previous, toolCall);
+          const merged = flavor.normalizeToolCall?.(mergedToolCall) ?? mergedToolCall;
           projectedStatus ??= owner === undefined ? undefined : stoppedToolStatus(owner, merged);
           if (merged.status !== "failed") subagent.interruptedToolIds.delete(key);
           if (projectedStatus === "interrupted") subagent.interruptedToolIds.add(key);
@@ -4343,7 +4344,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 turnItem = {
                   ...base,
                   type: "command_execution",
-                  input: toolCall.command ?? monitorCommand ?? toolCall.title ?? "Command",
+                  input:
+                    toolCall.command ??
+                    monitorCommand ??
+                    toolCall.detail ??
+                    toolCall.title ??
+                    "Command",
                   ...(textFromUnknown(rawOutput) === undefined
                     ? {}
                     : { output: textFromUnknown(rawOutput) }),
