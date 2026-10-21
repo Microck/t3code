@@ -169,6 +169,16 @@ function prepare() {
   );
   replaceRequired("scripts/install.sh", `repo="${upstream}"`, `repo="${fork}"`);
   replaceRequired("scripts/install.ps1", `$repo = "${upstream}"`, `$repo = "${fork}"`);
+  replaceRequired(
+    "scripts/install.sh",
+    'channel="${T3CODE_CHANNEL:-stable}"',
+    'channel="${T3CODE_CHANNEL:-nightly}"',
+  );
+  replaceRequired(
+    "scripts/install.ps1",
+    '$channel = if ($env:T3CODE_CHANNEL) { $env:T3CODE_CHANNEL } else { "stable" }',
+    '$channel = if ($env:T3CODE_CHANNEL) { $env:T3CODE_CHANNEL } else { "nightly" }',
+  );
   git("add", "packages/shared/src/cliRelease.ts", "scripts/install.sh", "scripts/install.ps1");
   git("commit", "-m", "build: follow personal release feeds");
   const source = git("rev-parse", "HEAD");
