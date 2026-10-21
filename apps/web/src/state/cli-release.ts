@@ -23,7 +23,7 @@ export function decodeCliReleaseAssets(body: unknown, version: string) {
   );
 }
 
-export const cliReleaseAssetsAtom = Atom.family((version: string) =>
+const cliReleaseAssetsAtom = Atom.family((version: string) =>
   Atom.make(
     Effect.gen(function* () {
       const response = yield* HttpClient.get(cliReleaseTagUrl(version));
