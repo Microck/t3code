@@ -1,6 +1,79 @@
 import type { AssetResource, OrchestrationV2TurnItem } from "@t3tools/contracts";
 import { toolOutputImageBlocks, toolOutputImages } from "@t3tools/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
+// OMP sends task progress inside the ordinary ACP tool result, not as child sessions.
+const OmpAgentProgress = Schema.Struct({
+  id: Schema.String,
+  agent: Schema.String,
+  status: Schema.Literals(["pending", "running", "completed", "failed", "aborted"]),
+  task: Schema.String,
+  assignment: Schema.optionalKey(Schema.String),
+  description: Schema.optionalKey(Schema.String),
+  currentTool: Schema.optionalKey(Schema.String),
+  currentToolArgs: Schema.optionalKey(Schema.String),
+  recentTools: Schema.Array(
+    Schema.Struct({
+      tool: Schema.String,
+      args: Schema.String,
+      endMs: Schema.Number,
+      isError: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+  recentOutput: Schema.Array(Schema.String),
+  toolCount: Schema.Number,
+  tokens: Schema.Number,
+  cost: Schema.Number,
+  durationMs: Schema.Number,
+  resolvedModel: Schema.optionalKey(Schema.String),
+  contextTokens: Schema.optionalKey(Schema.Number),
+  contextWindow: Schema.optionalKey(Schema.Number),
+  retryState: Schema.optionalKey(
+    Schema.Struct({
+      attempt: Schema.Number,
+      errorMessage: Schema.String,
+    }),
+  ),
+});
+export type OmpAgentProgress = typeof OmpAgentProgress.Type;
+const decodeOmpProgress = Schema.decodeUnknownOption(Schema.Array(OmpAgentProgress));
+
+export interface OmpTaskProgress {
+  readonly agents: ReadonlyArray<OmpAgentProgress>;
+  readonly text: string | null;
+}
+
+export function readOmpTaskProgress(output: unknown): OmpTaskProgress | null {
+  if (!isRecord(output) || !isRecord(output.details)) return null;
+  const agents = Option.getOrNull(decodeOmpProgress(output.details.progress));
+  return agents?.length ? { agents, text: formatToolValue(output.content) } : null;
+}
+
+const compactCount = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+export function ompAgentMetrics(agent: OmpAgentProgress): string {
+  return [
+    `${agent.toolCount} tools`,
+    `${compactCount.format(agent.tokens)} tokens`,
+    ...(agent.contextTokens === undefined
+      ? []
+      : [
+          `context ${compactCount.format(agent.contextTokens)}${agent.contextWindow === undefined ? "" : ` / ${compactCount.format(agent.contextWindow)}`}`,
+        ]),
+    `$${agent.cost.toFixed(4)}`,
+    `${Math.floor(agent.durationMs / 1000)}s`,
+  ].join(" · ");
+}
+
+export function ompAgentStatus(agent: OmpAgentProgress): string {
+  if (agent.retryState) return `Retrying (${agent.retryState.attempt})`;
+  return agent.status === "aborted" ? "Stopped" : agent.status;
+}
 
 const MAX_TEXT_BLOCK_DEPTH = 4;
 
@@ -230,7 +303,11 @@ export function turnItemHasDetail(item: OrchestrationV2TurnItem): boolean {
     case "web_search":
       return (item.results?.length ?? 0) > 0 || (item.patterns?.length ?? 0) > 0;
     case "dynamic_tool":
-      return item.outputOmitted === true || toolCallHasLines(toolCallLines({ args: item.input }));
+      return (
+        item.outputOmitted === true ||
+        item.output != null ||
+        toolCallHasLines(toolCallLines({ args: item.input }))
+      );
     case "approval_request":
       return Boolean(item.prompt?.trim());
     case "user_input_request":
