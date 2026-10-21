@@ -81,8 +81,8 @@ anywhere in the prompt to search the selected OMP provider's model catalog.
 Selecting a suggestion inserts the literal selector without switching your main model.
 
 OMP questions also carry #21770 (titled choices) and #21801 (optional form fields).
-You can select a choice and leave Other empty, or skip the choice and type your
-own answer in the Other field. OMP sends these as separate question steps.
+Each OMP question appears once, with choices and a custom-answer textbox in the
+same step. T3 maps typed answers back to OMP's companion Other field.
 Web, desktop and mobile preserve the optional fields; required questions and
 unfinished attachment uploads still block submission.
 
