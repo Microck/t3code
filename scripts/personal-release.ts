@@ -19,7 +19,8 @@ function run(command: string, args: ReadonlyArray<string>) {
 }
 
 const git = (...args: string[]) => run("git", args);
-const api = <T>(endpoint: string): T => JSON.parse(run("gh", ["api", endpoint])) as T;
+const api = <T>(endpoint: string, query = "."): T =>
+  JSON.parse(run("gh", ["api", endpoint, "--jq", query])) as T;
 const output = (name: string, value: string) =>
   NodeFS.appendFileSync(requiredEnv("GITHUB_OUTPUT"), `${name}=${value}\n`);
 
@@ -108,9 +109,11 @@ function requiredEnv(name: string): string {
 function prepare() {
   if (process.env.GITHUB_REPOSITORY !== fork)
     throw new Error("This workflow belongs to the personal fork only.");
-  const releases = api<Release[]>(`repos/${upstream}/releases?per_page=100`);
+  // Release payloads include every asset and can exceed the subprocess buffer.
+  const releaseFields = 'map({tag_name, draft, html_url, body: ((.body // "")|split("\\n")[0])})';
+  const releases = api<Release[]>(`repos/${upstream}/releases?per_page=100`, releaseFields);
   const release = officialNightly(releases);
-  const existing = api<Release[]>(`repos/${fork}/releases?per_page=100`);
+  const existing = api<Release[]>(`repos/${fork}/releases?per_page=100`, releaseFields);
   const marker = `Upstream: ${release.html_url}`;
   if (
     process.env.FORCE_BUILD !== "true" &&
