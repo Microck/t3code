@@ -91,6 +91,12 @@ such as `^openai-codex/gpt-6.1-sol`, for OMP's native delegation. Your main mode
 Suggestions use the provider's current catalog, so models excluded by OMP's ACP configuration
 are not offered.
 
+## Questions
+
+For local `omp acp` providers, each choice question includes a custom-answer
+textbox in the same step. Typing an answer replaces the selected choice; OMP's
+companion Other fields do not appear as extra questions.
+
 ## Commands and skills
 
 Slash commands the agent provides appear under **Provider** in the `/` menu while a session is
