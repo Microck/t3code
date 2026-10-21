@@ -96,7 +96,8 @@ jobs:
       - run: vp install
       - name: Verify the carried fixes
         run: |
-          vp test run apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts -t 'closes unfinished ACP tools|terminalizes an empty|direct Stop on a deferred|background work when interrupted|quarantine drops late'
+          vp test run apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts -t 'closes unfinished ACP tools|terminalizes an empty|direct Stop on a deferred|background work when interrupted|quarantine drops late|recovers from .* cancellation'
+          vp test run apps/server/src/orchestration-v2/Adapters/AcpRegistryAdapterV2.test.ts packages/effect-acp/src/protocol.test.ts
           vp test run apps/mobile/src/features/threads/use-composer-command-menu.test.ts
           vp exec tsc-rs --noEmit -p packages/provider-acp/tsconfig.json
           vp exec tsc-rs --noEmit -p apps/server/tsconfig.json

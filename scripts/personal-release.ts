@@ -9,6 +9,10 @@ const fixes = [
   // This rebased copy preserves upstream's deletion of the obsolete web test.
   { pr: 22466, commit: "fd47810fb03908bf7af6b2c62fe6c036c75b820b" },
   { pr: 22842, commit: "7023133093f93a329532e8021bf9c7e43106d56d" },
+  // Includes the activation-preference prerequisite needed for one resume after Stop.
+  { pr: 21439, commit: "c0057c6c51f2f24b39bd9c8ca7ce1800213df54f" },
+  { pr: 21323, commit: "0791507a577396732fbc2d07933c736e1da629d9" },
+  { pr: 22698, commit: "fca90d2e0d3b25f9ef74591a48cd73f119ba0a6d" },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
