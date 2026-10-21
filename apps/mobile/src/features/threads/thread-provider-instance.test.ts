@@ -27,7 +27,7 @@ function makeConfig(
   return {
     providers: providers.map((provider) => ({ enabled: true, ...provider })),
     environment: { capabilities: {}, platform: { machine: "laptop" } },
-    settings: {},
+    settings: { providerInstances: {} },
   } as unknown as ServerConfig;
 }
 

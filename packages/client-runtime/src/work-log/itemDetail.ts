@@ -28,8 +28,12 @@ const OmpAgentProgress = Schema.Struct({
   cost: Schema.Number,
   durationMs: Schema.Number,
   resolvedModel: Schema.optionalKey(Schema.String),
+  resolvedModelIdentity: Schema.optionalKey(Schema.String),
   contextTokens: Schema.optionalKey(Schema.Number),
   contextWindow: Schema.optionalKey(Schema.Number),
+  completionPercent: Schema.optionalKey(
+    Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+  ),
   retryState: Schema.optionalKey(
     Schema.Struct({
       attempt: Schema.Number,
@@ -72,6 +76,8 @@ export function ompAgentMetrics(agent: OmpAgentProgress): string {
 
 export function ompAgentStatus(agent: OmpAgentProgress): string {
   if (agent.retryState) return `Retrying (${agent.retryState.attempt})`;
+  if (agent.status === "running" && agent.completionPercent !== undefined)
+    return `running · ~${Math.round(agent.completionPercent)}%`;
   return agent.status === "aborted" ? "Stopped" : agent.status;
 }
 

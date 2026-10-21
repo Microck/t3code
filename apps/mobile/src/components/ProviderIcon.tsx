@@ -2,6 +2,8 @@ import { Image } from "expo-image";
 import { Defs, LinearGradient, Path, Stop, Svg } from "react-native-svg";
 import { View } from "react-native";
 import {
+  ompModelIcon,
+  GEMINI_ICON_PATH,
   normalizeProviderAccentColor,
   providerAccentForegroundColor,
   providerInstanceInitials,
@@ -13,6 +15,7 @@ import { AppText as Text } from "./ui/AppText";
 import { getProviderClient } from "../lib/providerClients";
 
 type ProviderIconProps = {
+  readonly ompModel?: string | undefined;
   readonly provider: string | null | undefined;
   readonly iconUrl?: string | null | undefined;
   readonly size?: number;
@@ -68,13 +71,21 @@ function AcpRegistryProviderIcon(props: {
 }
 
 export function ProviderIcon(props: ProviderIconProps) {
+  const provider = ompModelIcon(props.ompModel) ?? props.provider;
   const { themeAppearance } = useAppearancePreferences();
   const isDarkMode = themeAppearance === "dark";
   const gradientId = useId();
   const size = props.size ?? 16;
   const mono = isDarkMode ? "#e5e5e5" : "#171717";
 
-  if (props.provider?.trim().toLowerCase() === "antigravity") {
+  if (provider === "gemini")
+    return (
+      <Svg width={size} height={size} viewBox="0 0 24 24">
+        <Path fill={mono} d={GEMINI_ICON_PATH} />
+      </Svg>
+    );
+
+  if (provider?.trim().toLowerCase() === "antigravity") {
     return (
       <Image
         source={require("../../assets/antigravity.png")}
@@ -83,11 +94,11 @@ export function ProviderIcon(props: ProviderIconProps) {
       />
     );
   }
-  if (props.provider === "acpRegistry") {
+  if (provider === "acpRegistry") {
     return <AcpRegistryProviderIcon color={mono} iconUrl={props.iconUrl} size={size} />;
   }
 
-  if (props.provider === "claudeAgent") {
+  if (provider === "claudeAgent") {
     return (
       <Svg width={size} height={size} viewBox="0 0 256 257" fill="none">
         <Path
@@ -98,7 +109,7 @@ export function ProviderIcon(props: ProviderIconProps) {
     );
   }
 
-  const packageIcon = getProviderClient(props.provider)?.icon;
+  const packageIcon = getProviderClient(provider)?.icon;
   if (packageIcon) {
     const themeFill = (fill: { readonly light: string; readonly dark: string }) =>
       isDarkMode ? fill.dark : fill.light;
@@ -152,6 +163,7 @@ export function ProviderIcon(props: ProviderIconProps) {
 }
 
 export function ProviderInstanceIcon(props: {
+  readonly ompModel?: string | undefined;
   readonly iconUrl?: string | null;
   readonly provider: string | null | undefined;
   readonly size?: number;
@@ -164,7 +176,12 @@ export function ProviderInstanceIcon(props: {
   return (
     <View style={{ position: "relative" }}>
       <View style={{ opacity: 0.6 }}>
-        <ProviderIcon iconUrl={props.iconUrl} provider={props.provider} size={props.size} />
+        <ProviderIcon
+          ompModel={props.ompModel}
+          iconUrl={props.iconUrl}
+          provider={props.provider}
+          size={props.size}
+        />
       </View>
       {props.showBadge ? (
         // A wide right-aligned box lets the badge fit its initials. Alone, an
