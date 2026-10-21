@@ -29,11 +29,9 @@ const fixes: ReadonlyArray<{
   },
   {
     commit: "0e07d97b6ecd762a5b37e588d60e42a6fea2e53d",
-    label: "Keep the release lookup internal",
   },
   {
     commit: "1d6efdce95a7f1245a25b09984ca0d1d2700caaa",
-    label: "Node ESM import for the native progress regression",
   },
 ];
 
@@ -188,11 +186,9 @@ function prepare() {
       stdio: "inherit",
     });
     if (picked.status !== 0) resolveConflict(fix.commit, allowedFiles);
-    applied.push(
-      fix.pr === undefined
-        ? `${fix.label}: https://github.com/${fork}/commit/${fix.commit}`
-        : `https://github.com/${upstream}/pull/${fix.pr}`,
-    );
+    if (fix.pr !== undefined) applied.push(`https://github.com/${upstream}/pull/${fix.pr}`);
+    else if (fix.label)
+      applied.push(`${fix.label}: https://github.com/${fork}/commit/${fix.commit}`);
   }
   // The CLI release index and downloads must point at the same distribution.
   replaceRequired(
