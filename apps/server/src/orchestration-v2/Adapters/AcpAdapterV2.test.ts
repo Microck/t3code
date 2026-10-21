@@ -1725,9 +1725,13 @@ describe("AcpAdapterV2", () => {
                     {
                       sessionUpdate: "tool_call",
                       toolCallId: "child-later",
-                      title: "Later tool",
+                      title: "Tool",
+                      kind: "other",
                       status: "completed",
-                      _meta: { "cognition.ai/subagent_context": { parentAgentId: "child-a" } },
+                      _meta: {
+                        "cognition.ai/inferenceToolName": "web_fetch",
+                        "cognition.ai/subagent_context": { parentAgentId: "child-a" },
+                      },
                     },
                     {
                       sessionUpdate: "tool_call_update",
@@ -1879,6 +1883,13 @@ describe("AcpAdapterV2", () => {
       );
       assert.equal(parentTools.length, 2);
       assert.equal(parentTools[0]?.title, "Parent tool finished");
+      const childTool = items.find(
+        (item) =>
+          item.threadId === task?.childThreadId &&
+          item.type === "dynamic_tool" &&
+          item.nativeItemRef?.nativeId === "child-a:tool:child-later",
+      );
+      assert.equal(childTool?.title, "web_fetch");
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
@@ -2160,6 +2171,319 @@ describe("AcpAdapterV2", () => {
         "a notice neither joins the reply nor splits it",
       );
     }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("preserves ACP agent tool labels and command inputs through sparse updates", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let handler: Parameters<Runtime["handleSessionUpdate"]>[0] | undefined;
+      const calls = [
+        {
+          toolCallId: "terminal",
+          kind: "execute",
+          title: "Terminal",
+          content: [{ type: "content", content: { type: "text", text: "$ git --version" } }],
+        },
+        {
+          toolCallId: "description",
+          kind: "execute",
+          title: "execute_code: Running Python helper script",
+        },
+        { toolCallId: "skill", kind: "read", title: "skill_view: moveit-pro" },
+        {
+          toolCallId: "describe",
+          kind: "other",
+          title: "tool_describe: Reading tool details · 1 tool",
+        },
+        {
+          toolCallId: "generic-command",
+          kind: "execute",
+          title: "Terminal",
+          content: [
+            { type: "content", content: { type: "text", text: "$ git --version\noutput" } },
+          ],
+        },
+        { toolCallId: "generic-read", kind: "read", title: "Read file" },
+        {
+          toolCallId: "raw-command",
+          kind: "execute",
+          title: "terminal: git --version",
+          rawInput: { command: "git status --short" },
+          content: [{ type: "content", content: { type: "text", text: "$ git --version" } }],
+        },
+      ] satisfies Array<EffectAcpSchema.ToolCallUpdate>;
+      const instanceId = ProviderInstanceId.make("acp-tool-labels");
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        selfInvocation: yield* resolveSelfInvocation(),
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleSessionUpdate: (next) =>
+                Effect.sync(() => {
+                  handler = next;
+                }).pipe(Effect.andThen(runtime.handleSessionUpdate(next))),
+              prompt: () =>
+                Effect.gen(function* () {
+                  for (const call of calls) {
+                    yield* handler!({
+                      sessionId: "mock-session-1",
+                      update: { ...call, sessionUpdate: "tool_call", status: "pending" },
+                    });
+                    yield* handler!({
+                      sessionId: "mock-session-1",
+                      update: {
+                        sessionUpdate: "tool_call_update",
+                        toolCallId: call.toolCallId,
+                        status: "completed",
+                        ...(call.toolCallId === "terminal" ? { kind: "execute" as const } : {}),
+                        ...(call.toolCallId.startsWith("generic-")
+                          ? {}
+                          : {
+                              content: [
+                                {
+                                  type: "content",
+                                  content: {
+                                    type: "text",
+                                    text: call.toolCallId === "terminal" ? "$ 5.00" : "result",
+                                  },
+                                },
+                              ],
+                            }),
+                      },
+                    });
+                  }
+                  yield* handler!({
+                    sessionId: "mock-session-1",
+                    update: {
+                      sessionUpdate: "tool_call_update",
+                      toolCallId: "skill",
+                      kind: "read",
+                      locations: [{ path: "README.md" }],
+                    },
+                  });
+                  yield* handler!({
+                    sessionId: "mock-session-1",
+                    update: {
+                      sessionUpdate: "tool_call_update",
+                      toolCallId: "terminal",
+                      title: "Run `git diff`",
+                      status: "in_progress",
+                    },
+                  });
+                  yield* handler!({
+                    sessionId: "mock-session-1",
+                    update: {
+                      sessionUpdate: "tool_call_update",
+                      toolCallId: "terminal",
+                      title: "Run `git diff`",
+                      rawInput: { command: "git status --short" },
+                      status: "completed",
+                    },
+                  });
+                  return { stopReason: "end_turn" as const };
+                }),
+            }),
+          }),
+        },
+      });
+      const threadId = ThreadId.make("acp-tool-labels");
+      const modelSelection = { instanceId, model: "default" };
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("acp-tool-labels-session"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      const items = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      ).flatMap((event) => (event.type === "turn_item.updated" ? [event.turnItem] : []));
+      const command = (input: string) => ({
+        type: "command_execution" as const,
+        title: "Ran command",
+        input,
+      });
+      const terminal = items.findLast((item) => item.nativeItemRef?.nativeId === "terminal");
+      assert.isTrue(terminal?.type === "command_execution" && terminal.output?.includes("$ 5.00"));
+      const expected = [
+        command("git --version"),
+        command("execute_code: Running Python helper script"),
+        { type: "dynamic_tool", title: "skill_view: moveit-pro", input: {} },
+        {
+          type: "dynamic_tool",
+          title: "tool_describe: Reading tool details · 1 tool",
+          input: {},
+        },
+        command("Ran command"),
+        { type: "dynamic_tool", title: "Read file", input: {} },
+        command("git status --short"),
+      ] as const;
+      const observed = calls.map((call) =>
+        items
+          .filter((item) => item.nativeItemRef?.nativeId === call.toolCallId)
+          .map((item) => ({
+            type: item.type,
+            title: item.title,
+            input: "input" in item ? item.input : undefined,
+          })),
+      );
+      assert.deepEqual(
+        observed,
+        expected.map((item, index) => [
+          item,
+          item,
+          ...(calls[index]?.toolCallId === "terminal"
+            ? [command("git diff"), command("git status --short")]
+            : []),
+          ...(calls[index]?.toolCallId === "skill"
+            ? [
+                {
+                  type: "dynamic_tool" as const,
+                  title: "Read README.md",
+                  input: { path: "README.md" },
+                },
+              ]
+            : []),
+        ]),
+      );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect.each([
+    {
+      title: "execute_code: Running Python helper script",
+      content: [],
+      prompt: "execute_code: Running Python helper script",
+    },
+    {
+      title: "terminal: git --version",
+      content: [{ type: "content", content: { type: "text", text: "$ git --version" } }],
+      prompt: "git --version",
+    },
+  ] satisfies Array<{
+    title: string;
+    content: Array<EffectAcpSchema.ToolCallContent>;
+    prompt: string;
+  }>)(
+    "uses the ACP agent's command description in an existing approval prompt: $title",
+    ({ title, content, prompt }) =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const path = yield* Path.Path;
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
+        let requestPermission: Parameters<Runtime["handleRequestPermission"]>[0] | undefined;
+        const instanceId = ProviderInstanceId.make("acp-approval-label");
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          selfInvocation: yield* resolveSelfInvocation(),
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              wrapRuntime: (runtime) => ({
+                ...runtime,
+                handleRequestPermission: (handler) =>
+                  Effect.sync(() => {
+                    requestPermission = handler;
+                  }).pipe(Effect.andThen(runtime.handleRequestPermission(handler))),
+                prompt: () =>
+                  Effect.gen(function* () {
+                    yield* requestPermission!(
+                      {
+                        sessionId: "mock-session-1",
+                        toolCall: { toolCallId: "approval-label", kind: "execute", title, content },
+                        options: [
+                          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+                        ],
+                      },
+                      { requestId: "approval-label", method: "session/request_permission" },
+                    );
+                    return { stopReason: "end_turn" as const };
+                  }),
+              }),
+            }),
+          },
+        });
+        const threadId = ThreadId.make("acp-approval-label");
+        const modelSelection = { instanceId, model: "default" };
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("acp-approval-label-session"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+          }),
+        );
+        const event = Option.getOrThrow(
+          yield* runtime.events.pipe(
+            Stream.filter(
+              (event) =>
+                event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+            ),
+            Stream.runHead,
+          ),
+        );
+        assert.equal(
+          event.type === "turn_item.updated" && event.turnItem.type === "approval_request"
+            ? event.turnItem.prompt
+            : undefined,
+          prompt,
+        );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("projects ACP v2 fidelity updates into first-class orchestration items", () =>

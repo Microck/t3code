@@ -2621,7 +2621,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const rootSessionId = yield* Ref.get(activeSessionId);
           subagent.toolSessionIds.set(key, sessionId);
           const previous = context.tools.get(key);
-          const merged = mergeToolCallState(previous, toolCall);
+          const mergedToolCall = mergeToolCallState(previous, toolCall);
+          const merged = flavor.normalizeToolCall?.(mergedToolCall) ?? mergedToolCall;
           context.tools.set(key, merged);
           if (
             projectedStatus === undefined &&
@@ -3816,7 +3817,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 turnItem = {
                   ...base,
                   type: "command_execution",
-                  input: toolCall.command ?? monitorCommand ?? toolCall.title ?? "Command",
+                  input:
+                    toolCall.command ??
+                    monitorCommand ??
+                    toolCall.detail ??
+                    toolCall.title ??
+                    "Command",
                   ...(textFromUnknown(rawOutput) === undefined
                     ? {}
                     : { output: textFromUnknown(rawOutput) }),
