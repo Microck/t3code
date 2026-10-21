@@ -552,6 +552,7 @@ function extractToolCallCommand(
   rawInput: unknown,
   title: string | undefined,
   kind: string | undefined,
+  textContent: string | undefined,
 ): string | undefined {
   if (isRecord(rawInput)) {
     const directCommand = normalizeCommandValue(rawInput.command);
@@ -572,7 +573,10 @@ function extractToolCallCommand(
   if (kind !== "execute") {
     return undefined;
   }
-  return extractCommandFromTitle(title);
+  // Some ACP agents put the command in content instead of rawInput. Exclude multiline output.
+  const promptLine =
+    textContent === undefined ? undefined : /^\$ (?<command>[^\r\n]+)$/u.exec(textContent);
+  return extractCommandFromTitle(title) ?? (promptLine?.groups?.command?.trim() || undefined);
 }
 
 function filePathFromToolValue(value: unknown): string | undefined {
@@ -813,6 +817,7 @@ export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): Tool
 
 function makeToolCallState(
   input: {
+    readonly sessionUpdate?: AcpToolCallUpdate["sessionUpdate"];
     readonly toolCallId: string;
     readonly name?: string | null | undefined;
     readonly title?: string | null | undefined;
@@ -834,9 +839,15 @@ function makeToolCallState(
   }
   const title = input.title?.trim() || undefined;
   const kind = normalizeToolKind(input.kind);
-  const command = extractToolCallCommand(input.rawInput, title, kind);
   const extractedContent = extractTextContentFromToolCallContent(input.content);
   const textContent = extractedContent.text;
+  // Update content is output; initial calls and permission requests can carry a command here.
+  const command = extractToolCallCommand(
+    input.rawInput,
+    title,
+    kind,
+    input.sessionUpdate === "tool_call_update" ? undefined : textContent,
+  );
   const normalizedTitle =
     title && title.toLowerCase() !== "terminal" && title.toLowerCase() !== "tool call"
       ? title
@@ -912,6 +923,7 @@ function parseTypedToolCallState(
 ): AcpToolCallState | undefined {
   return makeToolCallState(
     {
+      sessionUpdate: event.sessionUpdate,
       toolCallId: event.toolCallId,
       name: event.name,
       title: event.title,
@@ -933,18 +945,34 @@ export function mergeToolCallState(
 ): AcpToolCallState {
   const nextKind = next.kind ?? (typeof next.data.kind === "string" ? next.data.kind : undefined);
   const kind = nextKind ?? previous?.kind;
-  const title = next.title ?? previous?.title;
-  const status = next.status ?? previous?.status;
-  const command = next.command ?? previous?.command;
-  const detail = next.detail ?? previous?.detail;
   const data = mergeToolActivityData(previous?.data, next.data) ?? next.data;
+  const command =
+    extractToolCallCommand(data.rawInput, undefined, undefined, undefined) ??
+    next.command ??
+    (kind === "execute" && typeof next.data.title === "string"
+      ? extractCommandFromTitle(next.data.title)
+      : undefined) ??
+    previous?.command;
+  if (command) {
+    data.command = command;
+  }
+  // Sparse updates omit unchanged fields. Re-derive from raw data so output cannot replace
+  // an execute label, and new or cleared paths cannot leave a stale read summary.
+  const presentation = deriveToolActivityPresentation({
+    itemType: canonicalItemTypeFromAcpToolKind(kind),
+    title: typeof data.title === "string" ? data.title : undefined,
+    detail: next.detail ?? previous?.detail,
+    data,
+    fallbackSummary: next.title ?? previous?.title,
+  });
+  const status = next.status ?? previous?.status;
   return {
     toolCallId: next.toolCallId,
     ...(kind ? { kind } : {}),
-    ...(title ? { title } : {}),
+    title: presentation.summary,
     ...(status ? { status } : {}),
     ...(command ? { command } : {}),
-    ...(detail ? { detail } : {}),
+    ...(presentation.detail ? { detail: presentation.detail } : {}),
     data,
   };
 }
@@ -1226,8 +1254,8 @@ export function parsePermissionRequest(
   const kind = normalizeToolKind(params.toolCall.kind) ?? "unknown";
   const detail =
     toolCall?.command ??
-    toolCall?.title ??
     toolCall?.detail ??
+    toolCall?.title ??
     (typeof params.sessionId === "string" ? `Session ${params.sessionId}` : undefined);
   return {
     kind,
