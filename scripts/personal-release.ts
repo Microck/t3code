@@ -19,6 +19,8 @@ const fixes: ReadonlyArray<{
   { pr: 22698, commit: "fca90d2e0d3b25f9ef74591a48cd73f119ba0a6d" },
   { pr: 20363, commit: "3309cdfaa9f42a87eaf47e6f08fa075f3155201c" },
   { pr: 21066, commit: "df744d509e241c09c31297f035cad170b3152ba0" },
+  { pr: 21770, commit: "616964bdd5ce2cea5a0d47c56c10db419c1b0b52" },
+  { pr: 21801, commit: "e348de82fdca7720c85a5899e9f66832e409a0e4" },
   {
     commit: "ab1a5f30df2c5b9bc81d4735aa2cc9fcadf97372",
     label: "Native OMP task progress on web, desktop and mobile",

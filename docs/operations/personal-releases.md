@@ -76,6 +76,12 @@ Initial publication does not install anything or restart a daily-driver server.
 The fork also carries #20363 (descriptive ACP tool labels) and #21066 (active work
 outside the history window). Existing fixes stay enabled.
 
+OMP questions also carry #21770 (titled choices) and #21801 (optional form fields).
+You can select a choice and leave Other empty, or skip the choice and type your
+own answer in the Other field. OMP sends these as separate question steps.
+Web, desktop and mobile preserve the optional fields; required questions and
+unfinished attachment uploads still block submission.
+
 Expand an OMP task tool in the work log to see its agents. Each agent row shows
 its status and current tool; expand it for the model, task, recent tools and
 output, cumulative tokens, context use, cost and duration. This reads the
