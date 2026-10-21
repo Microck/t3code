@@ -100,6 +100,7 @@ jobs:
           vp test run apps/server/src/orchestration-v2/Adapters/AcpRegistryAdapterV2.test.ts packages/effect-acp/src/protocol.test.ts
           vp test run apps/mobile/src/features/threads/use-composer-command-menu.test.ts
           vp test run packages/provider-acp/src/server/elicitation.test.ts apps/web/src/pendingUserInput.test.ts apps/mobile/src/lib/threadActivity.test.ts packages/contracts/src/orchestrationV2.test.ts
+          vp test run apps/web/src/composer-logic.test.ts apps/web/src/components/chat/ComposerCommandMenu.test.tsx apps/web/src/components/chat/composerMenuHighlight.test.ts
           vp test run apps/server/src/provider/acp/AcpJsonRpcConnection.test.ts apps/server/src/orchestration-v2/threadHistoryPaging.test.ts
           vp test run packages/client-runtime/src/state/orchestrationV2Projection.test.ts packages/client-runtime/src/state/threadRelationships.test.ts packages/client-runtime/src/work-log/item-detail.test.ts
           vp test run packages/shared/src/cliRelease.test.ts apps/web/src/state/cli-release.test.ts apps/web/src/components/sidebar/updateEverything.logic.test.ts

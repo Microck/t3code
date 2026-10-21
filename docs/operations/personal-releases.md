@@ -76,6 +76,10 @@ Initial publication does not install anything or restart a daily-driver server.
 The fork also carries #20363 (descriptive ACP tool labels) and #21066 (active work
 outside the history window). Existing fixes stay enabled.
 
+The fork carries #22972 for OMP model mentions: type `^` at a word boundary
+anywhere in the prompt to search the selected OMP provider's model catalog.
+Selecting a suggestion inserts the literal selector without switching your main model.
+
 OMP questions also carry #21770 (titled choices) and #21801 (optional form fields).
 You can select a choice and leave Other empty, or skip the choice and type your
 own answer in the Other field. OMP sends these as separate question steps.
