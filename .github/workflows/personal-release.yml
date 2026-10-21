@@ -1,0 +1,233 @@
+name: Personal T3 updates
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if this upstream nightly was already published
+        type: boolean
+        default: false
+
+concurrency:
+  group: personal-release
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  prepare:
+    if: github.repository == 'Microck/t3code'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    outputs:
+      build: ${{ steps.prepare.outputs.build }}
+      source: ${{ steps.prepare.outputs.source }}
+      branch: ${{ steps.prepare.outputs.branch }}
+      version: ${{ steps.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: npm install --global @github/copilot@1.0.101
+      - name: Prepare official source with pending fixes
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          FORCE_BUILD: ${{ inputs.force || false }}
+        run: |
+          gh auth setup-git
+          cp scripts/personal-release.ts "$RUNNER_TEMP/personal-release.ts"
+          cp scripts/personal-return.* "$RUNNER_TEMP/"
+          node "$RUNNER_TEMP/personal-release.ts"
+      - uses: actions/upload-artifact@v7
+        if: steps.prepare.outputs.build == 'true'
+        with:
+          name: personal-release-notes
+          path: |
+            ${{ runner.temp }}/personal-release-notes.md
+            ${{ runner.temp }}/return-to-official.*
+            ${{ runner.temp }}/install-personal.*
+
+  bundle:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      T3CODE_CLERK_PUBLISHABLE_KEY: pk_live_Y2xlcmsudDMuY29kZXMk
+      T3CODE_CLERK_JWT_TEMPLATE: t3-relay
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: hzxSgY2cH10sDU2r
+      T3CODE_RELAY_URL: https://relay.t3.codes
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: Microck/t3code
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.source }}
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          run-install: false
+          cache: true
+      - run: vp install
+      - name: Verify the carried fixes
+        run: |
+          vp test run apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts -t 'closes unfinished ACP tools|terminalizes an empty|direct Stop on a deferred|background work when interrupted|quarantine drops late'
+          vp test run apps/mobile/src/features/threads/use-composer-command-menu.test.ts
+          vp exec tsc-rs --noEmit -p packages/provider-acp/tsconfig.json
+          vp exec tsc-rs --noEmit -p apps/server/tsconfig.json
+      - run: node scripts/update-release-package-versions.ts "$VERSION"
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+      - run: vp run build:desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+
+  linux_x64:
+    needs: [prepare, bundle]
+    if: needs.prepare.outputs.build == 'true'
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      label: Linux x64
+      runner: ubuntu-24.04
+      platform: linux
+      target: AppImage
+      arch: x64
+      rust_target: x86_64-unknown-linux-gnu
+      resource_key: linux-x64
+      cli_archive: true
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.source }}
+      release_channel: nightly
+      relay_client_tracing: false
+      clerk_publishable_key: pk_live_Y2xlcmsudDMuY29kZXMk
+      clerk_jwt_template: t3-relay
+      clerk_cli_oauth_client_id: hzxSgY2cH10sDU2r
+      relay_url: https://relay.t3.codes
+
+  linux_arm64:
+    needs: [prepare, bundle]
+    if: needs.prepare.outputs.build == 'true'
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      label: Linux arm64
+      runner: ubuntu-24.04-arm
+      platform: linux
+      target: AppImage
+      arch: arm64
+      rust_target: aarch64-unknown-linux-gnu
+      resource_key: linux-arm64
+      cli_archive: true
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.source }}
+      release_channel: nightly
+      relay_client_tracing: false
+      clerk_publishable_key: pk_live_Y2xlcmsudDMuY29kZXMk
+      clerk_jwt_template: t3-relay
+      clerk_cli_oauth_client_id: hzxSgY2cH10sDU2r
+      relay_url: https://relay.t3.codes
+
+  windows:
+    needs: [prepare, bundle]
+    if: needs.prepare.outputs.build == 'true'
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      label: Windows x64
+      runner: ubuntu-24.04
+      platform: win
+      target: nsis
+      arch: x64
+      rust_target: x86_64-pc-windows-msvc
+      resource_key: win32-x64
+      verify_runner: windows-2025
+      cli_archive: true
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.source }}
+      release_channel: nightly
+      relay_client_tracing: false
+      clerk_publishable_key: pk_live_Y2xlcmsudDMuY29kZXMk
+      clerk_jwt_template: t3-relay
+      clerk_cli_oauth_client_id: hzxSgY2cH10sDU2r
+      relay_url: https://relay.t3.codes
+
+  publish:
+    needs: [prepare, linux_x64, linux_arm64, windows]
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cli-*
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-win-x64
+          path: release-assets
+      - uses: actions/download-artifact@v8
+        with:
+          name: personal-release-notes
+          path: notes
+      - name: Publish tested release and update metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE: ${{ needs.prepare.outputs.source }}
+        run: |
+          set -euo pipefail
+          cd release-assets
+          cp ../notes/return-to-official.* ../notes/install-personal.* .
+          mv nightly-win-x64.yml nightly.yml
+          rm -f builder-debug.yml
+          sha256sum t3-*.tar.gz t3-*.zip > SHA256SUMS
+          gh release create "v$VERSION" --repo Microck/t3code --target "$SOURCE" --draft --prerelease --title "Personal T3 $VERSION" --notes-file ../notes/personal-release-notes.md ./*
+          gh release edit "v$VERSION" --repo Microck/t3code --draft=false
+
+  finish:
+    needs: [prepare, bundle, linux_x64, linux_arm64, windows, publish]
+    if: always() && github.repository == 'Microck/t3code'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - name: Report failures and remove the generated build branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULTS: ${{ toJSON(needs) }}
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          if jq -e 'any(.[]; .result == "failure" || .result == "cancelled")' <<< "$RESULTS" >/dev/null; then
+            issue=$(gh issue list --repo Microck/t3code --state open --search '"Personal update needs attention" in:title' --json number --jq '.[0].number // empty')
+            if [[ -n "$issue" ]]; then
+              gh issue comment "$issue" --repo Microck/t3code --body "Update withheld. The installed version is unchanged. Logs: $RUN_URL"
+            else
+              gh issue create --repo Microck/t3code --title 'Personal update needs attention' --body "Update withheld. The installed version is unchanged. Logs: $RUN_URL"
+            fi
+          fi
+          if [[ "$BRANCH" == personal-build/* ]]; then
+            gh api --method DELETE "repos/Microck/t3code/git/refs/heads/$BRANCH"
+          fi
