@@ -7,7 +7,8 @@ import {
   makeAcpRegistryAdapterV2,
 } from "@t3tools/provider-acp-registry/testing";
 import { AcpRegistrySettings } from "@t3tools/provider-acp-registry/settings";
-import { AcpRegistryCatalog } from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
+import { layerFromHost as registryCatalogLayer } from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { decodeAcpReplayTranscript, makeAcpReplayRuntime } from "./AcpAdapterV2.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
@@ -95,6 +96,11 @@ import {
 
 const DEFAULT_GROK_SETTINGS = Schema.decodeSync(GrokSettings)({});
 const DROID_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({ agentId: "factory-droid" });
+const ompSettings = Schema.decodeSync(AcpRegistrySettings)({
+  source: "local",
+  commandPath: "/usr/local/bin/omp",
+  commandArgs: ["acp"],
+});
 
 const layerHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
 
@@ -429,8 +435,60 @@ describe("AcpAdapterV2", () => {
     ],
   }));
 
+  const ompSchema = {
+    type: "object",
+    properties: Object.fromEntries(
+      [0, 1, 2].flatMap((index) => {
+        const choices = [
+          { const: "Alpha", title: "Alpha" },
+          { const: "Beta", title: "Beta" },
+        ];
+        return [
+          [
+            `q${index}`,
+            {
+              ...(index === 2
+                ? { type: "array", items: { anyOf: choices } }
+                : { type: "string", oneOf: choices }),
+              title: `Which option for question ${index + 1}?`,
+              description: `Choice ${index + 1}`,
+            },
+          ],
+          [`q${index}__other`, { type: "string", title: "Other (type your own)" }],
+        ];
+      }),
+    ),
+  };
+  const ompQuestions = [0, 1, 2].map((index) => ({
+    id: `q${index}`,
+    header: `Choice ${index + 1}`,
+    question: `Which option for question ${index + 1}?`,
+    options: ["Alpha", "Beta"].map((value) => ({ label: value, value, description: value })),
+    required: false,
+    ...(index === 2 ? { multiSelect: true } : {}),
+  }));
+
   // regression: #20417 Droid AskUser answers were sent as a cancel
   it.live.each([
+    {
+      scenario: "OMP keeps three questions and returns selected and custom answers",
+      settings: ompSettings,
+      schema: ompSchema,
+      questions: ompQuestions,
+      answers: { q0: "Alpha", q1: "Own answer", q2: ["Beta"] },
+      result: { action: "accept", content: { q0: "Alpha", q1__other: "Own answer", q2: ["Beta"] } },
+    },
+    {
+      scenario: "OMP sends a multi-select custom answer through its companion field",
+      settings: ompSettings,
+      schema: ompSchema,
+      questions: ompQuestions,
+      answers: { q0: "Beta", q1: "Alpha", q2: "Own destinations" },
+      result: {
+        action: "accept",
+        content: { q0: "Beta", q1: "Alpha", q2__other: "Own destinations" },
+      },
+    },
     {
       scenario: "preserves selected IDs and encodes custom answers",
       schema: droidSchema,
@@ -482,179 +540,177 @@ describe("AcpAdapterV2", () => {
       answers: { name: "Ada" },
       result: { action: "accept", content: { name: "Ada" } },
     },
-  ])("Droid elicitation $scenario", ({ schema, questions, answers, result, withAttachments }) =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-droid-form-" });
-      const statusPath = path.join(directory, "status.json");
-      const expectedResult = typeof result === "function" ? result(directory) : result;
-      let preparedAnswers: ProviderUserInputAnswers | undefined = answers;
-      if (withAttachments && answers !== undefined) {
-        yield* fileSystem.writeFileString(path.join(directory, "droid-shot.png"), "image");
-        yield* fileSystem.writeFileString(path.join(directory, "droid-spec.txt"), "spec");
-        preparedAnswers = yield* appendUserInputAttachmentPaths({
-          answers,
-          attachmentsDir: directory,
-          attachmentsByQuestionId: {
-            question_1: [
+  ])(
+    "native ACP elicitation $scenario",
+    ({ schema, questions, answers, result, withAttachments, settings = DROID_SETTINGS }) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-droid-form-" });
+        const statusPath = path.join(directory, "status.json");
+        const expectedResult = typeof result === "function" ? result(directory) : result;
+        let preparedAnswers: ProviderUserInputAnswers | undefined = answers;
+        if (withAttachments && answers !== undefined) {
+          yield* fileSystem.writeFileString(path.join(directory, "droid-shot.png"), "image");
+          yield* fileSystem.writeFileString(path.join(directory, "droid-spec.txt"), "spec");
+          preparedAnswers = yield* appendUserInputAttachmentPaths({
+            answers,
+            attachmentsDir: directory,
+            attachmentsByQuestionId: {
+              question_1: [
+                {
+                  type: "image",
+                  id: "droid-shot",
+                  name: "shot.png",
+                  mimeType: "image/png",
+                  sizeBytes: 5,
+                },
+                {
+                  type: "file",
+                  id: "droid-spec",
+                  name: "spec.txt",
+                  mimeType: "text/plain",
+                  sizeBytes: 4,
+                },
+              ],
+            },
+          });
+        }
+        const driver = ProviderDriverKind.make("acpRegistry");
+        const transcript = yield* decodeAcpReplayTranscript(
+          {
+            provider: driver,
+            protocol: "acp.ndjson-jsonrpc",
+            version: "1",
+            scenario: "droid-form",
+            entries: [
               {
-                type: "image",
-                id: "droid-shot",
-                name: "shot.png",
-                mimeType: "image/png",
-                sizeBytes: 5,
+                type: "expect_outbound",
+                frame: { kind: "request", method: "initialize", params: "<any>" },
               },
               {
-                type: "file",
-                id: "droid-spec",
-                name: "spec.txt",
-                mimeType: "text/plain",
-                sizeBytes: 4,
-              },
-            ],
-          },
-        });
-      }
-      const driver = ProviderDriverKind.make("acpRegistry");
-      const transcript = yield* decodeAcpReplayTranscript(
-        {
-          provider: driver,
-          protocol: "acp.ndjson-jsonrpc",
-          version: "1",
-          scenario: "droid-form",
-          entries: [
-            {
-              type: "expect_outbound",
-              frame: { kind: "request", method: "initialize", params: "<any>" },
-            },
-            {
-              type: "emit_inbound",
-              frame: {
-                kind: "response",
-                method: "initialize",
-                result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },
-              },
-            },
-            {
-              type: "expect_outbound",
-              frame: { kind: "request", method: "session/new", params: "<any>" },
-            },
-            {
-              type: "emit_inbound",
-              frame: {
-                kind: "response",
-                method: "session/new",
-                result: { sessionId: "droid-session" },
-              },
-            },
-            {
-              type: "expect_outbound",
-              frame: { kind: "request", method: "session/prompt", params: "<any>" },
-            },
-            {
-              type: "emit_inbound",
-              frame: {
-                kind: "request",
-                method: "elicitation/create",
-                params: {
-                  mode: "form",
-                  sessionId: "droid-session",
-                  message: "Your answer?",
-                  requestedSchema: schema,
+                type: "emit_inbound",
+                frame: {
+                  kind: "response",
+                  method: "initialize",
+                  result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },
                 },
               },
-            },
-            {
-              type: "expect_outbound",
-              frame: {
-                kind: "response",
-                method: "elicitation/create",
-                result: expectedResult,
+              {
+                type: "expect_outbound",
+                frame: { kind: "request", method: "session/new", params: "<any>" },
               },
-            },
-            {
-              type: "emit_inbound",
-              frame: {
-                kind: "response",
-                method: "session/prompt",
-                result: { stopReason: "end_turn" },
+              {
+                type: "emit_inbound",
+                frame: {
+                  kind: "response",
+                  method: "session/new",
+                  result: { sessionId: "droid-session" },
+                },
               },
-            },
-            { type: "runtime_exit", status: "success" },
-          ],
-        },
-        driver,
-      );
-      const instanceId = ProviderInstanceId.make("droid-form-test");
-      const adapter = yield* makeAcpRegistryAdapterV2({
-        instanceId,
-        selfInvocation: yield* resolveSelfInvocation(),
-        settings: DROID_SETTINGS,
-        environment: {},
-        makeRuntime: makeAcpReplayRuntime({
-          transcript,
-          statusPath,
-          fileSystem,
-          scriptPath: yield* path.fromFileUrl(
-            new URL("../../../scripts/acp-replay-agent.ts", import.meta.url),
-          ),
-          childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-        }),
-      }).pipe(
-        Effect.provide(
-          Layer.mock(AcpRegistryCatalog)({ resolve: () => Effect.die("runtime is injected") }),
-        ),
-      );
-      const threadId = ThreadId.make("droid-form-thread");
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        cwd: directory,
-      });
-      const runtime = yield* adapter.openSession({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-        providerSessionId: ProviderSessionId.make("droid-form-session"),
-      });
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      yield* runtime.startTurn(
-        makeTurnInput({
-          threadId,
-          providerThread,
+              {
+                type: "expect_outbound",
+                frame: { kind: "request", method: "session/prompt", params: "<any>" },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  kind: "request",
+                  method: "elicitation/create",
+                  params: {
+                    mode: "form",
+                    sessionId: "droid-session",
+                    message: "Your answer?",
+                    requestedSchema: schema,
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                frame: {
+                  kind: "response",
+                  method: "elicitation/create",
+                  result: expectedResult,
+                },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  kind: "response",
+                  method: "session/prompt",
+                  result: { stopReason: "end_turn" },
+                },
+              },
+              { type: "runtime_exit", status: "success" },
+            ],
+          },
+          driver,
+        );
+        const instanceId = ProviderInstanceId.make("droid-form-test");
+        const adapter = yield* makeAcpRegistryAdapterV2({
           instanceId,
+          selfInvocation: yield* resolveSelfInvocation(),
+          settings,
+          environment: {},
+          makeRuntime: makeAcpReplayRuntime({
+            transcript,
+            statusPath,
+            fileSystem,
+            scriptPath: yield* path.fromFileUrl(
+              new URL("../../../scripts/acp-replay-agent.ts", import.meta.url),
+            ),
+            childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+          }),
+        }).pipe(Effect.provide(registryCatalogLayer.pipe(Layer.provide(FetchHttpClient.layer))));
+        const threadId = ThreadId.make("droid-form-thread");
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: directory,
+        });
+        const runtime = yield* adapter.openSession({
+          threadId,
+          modelSelection,
           runtimePolicy,
-          now: yield* DateTime.now,
-        }),
-      );
-      const item = Option.getOrThrow(
-        yield* runtime.events.pipe(
-          Stream.filter(
-            (event) =>
-              event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+          providerSessionId: ProviderSessionId.make("droid-form-session"),
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+          }),
+        );
+        const item = Option.getOrThrow(
+          yield* runtime.events.pipe(
+            Stream.filter(
+              (event) =>
+                event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+            ),
+            Stream.runHead,
           ),
+        );
+        if (item.type !== "turn_item.updated" || item.turnItem.type !== "user_input_request")
+          return yield* Effect.die("Expected Droid question");
+        assert.deepEqual(item.turnItem.questions, questions);
+        yield* runtime.respondToRuntimeRequest({
+          requestId: item.turnItem.requestId,
+          ...(preparedAnswers === undefined ? {} : { answers: preparedAnswers }),
+        });
+        const terminal = yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
           Stream.runHead,
-        ),
-      );
-      if (item.type !== "turn_item.updated" || item.turnItem.type !== "user_input_request")
-        return yield* Effect.die("Expected Droid question");
-      assert.deepEqual(item.turnItem.questions, questions);
-      yield* runtime.respondToRuntimeRequest({
-        requestId: item.turnItem.requestId,
-        ...(preparedAnswers === undefined ? {} : { answers: preparedAnswers }),
-      });
-      const terminal = yield* runtime.events.pipe(
-        Stream.filter((event) => event.type === "turn.terminal"),
-        Stream.runHead,
-      );
-      assert.equal(Option.getOrThrow(terminal).status, "completed");
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
+        );
+        assert.equal(Option.getOrThrow(terminal).status, "completed");
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live.each(["failed", "recovered", "cancelled"] as const)(
