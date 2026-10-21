@@ -6399,8 +6399,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           return yield* flavor.withRuntimeStartup?.(startup) ?? startup;
         });
 
-        const restartAcpRuntime = Effect.fnUntraced(function* (threadId: ThreadId | null) {
-          yield* spawnAcpRuntime(threadId);
+        const restartAcpRuntime = Effect.fnUntraced(function* (
+          threadId: ThreadId | null,
+          resumeSessionId?: string,
+        ) {
+          yield* spawnAcpRuntime(
+            threadId,
+            flavor.preferResumeSession === true && canResumeSession ? resumeSessionId : undefined,
+          );
           yield* wireAcpRuntimeHandlers(runtime, yield* Ref.get(runtimeCallbackGeneration));
         });
 
@@ -6619,14 +6625,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const mcpContext = yield* readMcpContext(threadId);
           const activationOptions = acpMcpActivation(mcpContext);
           prepareTerminalEnvironment(mcpContext, sessionId);
-          const activated = canLoadSession
-            ? yield* runtime.loadSession(sessionId, activationOptions)
-            : canResumeSession
+          const activated =
+            canResumeSession && (flavor.preferResumeSession === true || !canLoadSession)
               ? yield* runtime.resumeSession(sessionId, activationOptions)
-              : yield* new ProviderAdapter.ProviderAdapterProtocolError({
-                  driver,
-                  detail: `ACP driver cannot load or resume session ${sessionId}`,
-                });
+              : canLoadSession
+                ? yield* runtime.loadSession(sessionId, activationOptions)
+                : yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                    driver,
+                    detail: `ACP driver cannot load or resume session ${sessionId}`,
+                  });
           rememberTerminalEnvironment(activated.sessionId, yield* readMcpContext(threadId));
           return activated;
         });
@@ -7242,10 +7249,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 
         const restartRuntimeAfterTeardownIfRequired = Effect.fnUntraced(function* (
           threadId: ThreadId | null,
+          resumeSessionId?: string,
         ) {
           const restartRequired = yield* Ref.get(runtimeRestartRequired);
           if (!restartRequired) return false;
-          yield* restartAcpRuntime(threadId);
+          yield* restartAcpRuntime(threadId, resumeSessionId);
           yield* Ref.set(runtimeRestartRequired, false);
           yield* Ref.set(activeSessionId, null);
           yield* Ref.set(activeSessionSetup, null);
@@ -7280,6 +7288,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const requestedSessionId = yield* nativeThreadId(driver, turnInput.providerThread);
             const restartAfterInterrupt = yield* restartRuntimeAfterTeardownIfRequired(
               turnInput.threadId,
+              requestedSessionId,
             );
             const needsSessionActivation =
               (yield* Ref.get(activeSessionId)) !== requestedSessionId || restartAfterInterrupt;
@@ -7827,6 +7836,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   });
                   const restartAfterInterrupt = yield* restartRuntimeAfterTeardownIfRequired(
                     threadInput.providerThread.appThreadId,
+                    sessionId,
                   ).pipe(Effect.tapError(() => restorePreviousItemIdentity));
                   if ((yield* Ref.get(activeSessionId)) !== sessionId || restartAfterInterrupt) {
                     yield* Ref.set(snapshot, {
@@ -8162,7 +8172,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         // acknowledge and would only threaten still-running
                         // background subagents.
                         if (!settledSoftInterrupt) {
-                          yield* runtime.cancel;
+                          const cancelExit = yield* Effect.exit(runtime.cancel);
+                          if (Exit.isFailure(cancelExit)) {
+                            yield* Ref.set(runtimeRestartRequired, true);
+                            yield* Deferred.await(context.completed).pipe(
+                              Effect.timeoutOption("2 seconds"),
+                            );
+                            yield* finalizeTurn(context, "interrupted");
+                            return yield* Effect.failCause(cancelExit.cause);
+                          }
                         }
                         if (restartRuntime && flavor.restartRuntimeAfterInterrupt === true) {
                           yield* Ref.set(runtimeRestartRequired, true);
@@ -8172,6 +8190,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         Effect.timeoutOption("10 seconds"),
                       );
                       if (Option.isNone(stopped)) {
+                        yield* Ref.set(runtimeRestartRequired, true);
                         if (!context.finalized) {
                           yield* finalizeTurn(context, "interrupted");
                         }
