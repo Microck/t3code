@@ -67,8 +67,9 @@ import {
   type ComposerSubmissionIntent,
   collapseExpandedComposerCursor,
   composerRequiresModifier,
-  composerStateAtPromptEnd,
-  detectComposerTrigger,
+  composerStateAtPromptEnd as composerPromptStateAtEnd,
+  detectComposerTrigger as detectPromptTrigger,
+  supportsOmpModelMentions,
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
   isPathSuggestionCurrent,
@@ -923,6 +924,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         (multipleModelSelections === null ? providerSendBlockReason : null)));
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = selectedProviderEntry?.snapshot ?? null;
+  const modelMentionsEnabled = supportsOmpModelMentions(
+    settings.providerInstances[selectedInstanceId],
+  );
+  const detectComposerTrigger = (text: string, cursor: number) =>
+    detectPromptTrigger(text, cursor, modelMentionsEnabled);
+  const composerStateAtPromptEnd = (text: string, literalText = false) =>
+    composerPromptStateAtEnd(text, literalText, modelMentionsEnabled);
   const compactCommandAvailable = providerSupportsManualCompaction(selectedProviderEntry);
   const selectedProviderSkills = selectedProviderStatus
     ? resolveProviderSkillsForCwd(selectedProviderStatus, gitCwd)
@@ -986,7 +994,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return collapseExpandedComposerCursor(value, value.length, isLiteralPendingAnswer);
   });
   const {
-    trigger: composerTrigger,
+    trigger: activeComposerTrigger,
     setTrigger: setComposerTrigger,
     resolveTrigger: resolveComposerTrigger,
     dismissTrigger: dismissComposerTrigger,
@@ -994,6 +1002,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   } = useComposerTriggerState(() =>
     isLiteralPendingAnswer ? null : detectComposerTrigger(prompt, prompt.length),
   );
+  const composerTrigger =
+    activeComposerTrigger?.kind === "model-mention" && !modelMentionsEnabled
+      ? null
+      : activeComposerTrigger;
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const composerSuggestionId = useId();
   const composerSuggestionListId = `${composerSuggestionId}-${encodeURIComponent(draftId ?? activeThreadId ?? "new")}-suggestions`;
@@ -1126,6 +1138,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProviderSlashCommands,
     showSkillsInSlashMenu: settings.showSkillsInSlashMenu,
     questionAttachmentTarget,
+    selectedProviderModels,
+    selectedInstanceId,
   });
 
   const composerMenuOpen = Boolean(composerTrigger);
@@ -1466,6 +1480,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activePendingProgress?.activeQuestion?.id,
     isLiteralPendingAnswer,
     activePendingUserInput?.requestId,
+    composerStateAtPromptEnd,
     prompt,
     promptRef,
     resetComposerTrigger,
@@ -1840,6 +1855,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     const { snapshot, trigger } = resolveActiveComposerTrigger();
     if (!trigger) return;
+    if (item.type === "model-mention") {
+      if (
+        trigger.kind !== "model-mention" ||
+        item.instanceId !== selectedInstanceId ||
+        !composerMenuItemsRef.current.some((candidate) => candidate.id === item.id)
+      )
+        return;
+      const replacement = `^${item.model} `;
+      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+        snapshot.value,
+        trigger.rangeEnd,
+        replacement,
+      );
+      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
+        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+      });
+      if (applied) setComposerHighlightedItemId(null);
+      return;
+    }
     if (item.type === "path") {
       if (!isPathSuggestionCurrent(item.searchTarget, trigger, environmentId, gitCwd)) return;
       const replacement = `${serializeComposerFileLink(item.path)} `;
