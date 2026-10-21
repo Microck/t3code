@@ -126,6 +126,7 @@ export type SidebarProviderEntry = Pick<
   | "accentColor"
   | "acpRegistryAgentId"
   | "acpRegistryIconUrl"
+  | "isOmp"
   | "models"
 >;
 function compactSidebarTimeLabel(label: string): string {
@@ -192,6 +193,7 @@ function SidebarProviderStack(props: {
   );
   const current = (
     <ProviderInstanceIcon
+      ompModel={currentEntry.isOmp ? props.thread.modelSelection.model : undefined}
       driverKind={currentEntry.driverKind}
       displayName={currentEntry.displayName}
       accentColor={currentEntry.accentColor}
@@ -307,6 +309,7 @@ function SidebarThreadTooltip({
         {driverKind ? (
           <div className="flex min-w-0 items-center gap-2">
             <ProviderInstanceIcon
+              ompModel={providerEntry?.isOmp ? thread.modelSelection.model : undefined}
               driverKind={driverKind}
               displayName={
                 providerEntry?.displayName ?? thread.runtime?.providerName ?? modelInstanceId

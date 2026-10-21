@@ -1,4 +1,5 @@
 import {
+  isOmpProvider,
   normalizeProviderAccentColor,
   resolveProviderInstanceDisplayName,
   shouldShowInstanceBadge,
@@ -19,6 +20,7 @@ import {
 import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
 
 export type ModelOption = {
+  readonly ompModel?: string | undefined;
   readonly key: string;
   readonly label: string;
   readonly shortName?: string;
@@ -308,6 +310,7 @@ export function buildModelOptions(
 
     const providerLabel = providerDisplayLabel(provider);
     const providerBadge = providerBadgeFor(provider.instanceId);
+    const isOmp = isOmpProvider(config?.settings?.providerInstances?.[provider.instanceId]);
     const updateRequired = provider.updateRequiredModels?.length
       ? { driver: provider.driver, updateRequiredModels: provider.updateRequiredModels }
       : undefined;
@@ -330,6 +333,7 @@ export function buildModelOptions(
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
+        ...(isOmp ? { ompModel: model.slug } : {}),
         providerBadge,
         ...(provider.supportedRuntimeModes === undefined
           ? {}
@@ -397,6 +401,7 @@ export function buildModelOptions(
         ...(shortName ? { shortName } : {}),
         subtitle: model?.subProvider ?? "",
         providerKey: fallbackModelSelection.instanceId,
+        ...(isOmpProvider(instanceConfig) ? { ompModel: fallbackModelSelection.model } : {}),
         providerLabel,
         providerDriver,
         providerBadge: providerBadgeFor(fallbackModelSelection.instanceId),

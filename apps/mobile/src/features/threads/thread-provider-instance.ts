@@ -11,6 +11,7 @@ import type { EnvironmentId, ProviderDriverKind } from "@t3tools/contracts";
 import type { ThreadListProvider } from "../../state/thread-list-environments";
 export interface ThreadRowProviderInstance {
   readonly driverKind: ProviderDriverKind;
+  readonly isOmp?: boolean;
   readonly displayName: string;
   readonly accentColor?: string | undefined;
   readonly showBadge: boolean;
@@ -27,6 +28,7 @@ export function resolveThreadProviderInstance(
   if (!snapshot) return null;
   const entry = {
     driverKind: snapshot.driver,
+    isOmp: snapshot.isOmp,
     displayName: resolveProviderInstanceDisplayName(snapshot),
     accentColor: normalizeProviderAccentColor(snapshot.accentColor),
   };

@@ -13,6 +13,7 @@ import {
   type ServerProviderState,
 } from "@t3tools/contracts";
 import {
+  isOmpProvider,
   normalizeProviderAccentColor,
   resolveProviderInstanceDisplayName,
   shouldShowInstanceBadge,
@@ -27,6 +28,7 @@ export const NO_PROVIDER_MODEL_SELECTION: ModelSelection = {
 };
 
 export interface ProviderInstanceEntry {
+  readonly isOmp?: boolean | undefined;
   readonly instanceId: ProviderInstanceId;
   readonly driverKind: ProviderDriverKind;
   readonly displayName: string;
@@ -133,12 +135,18 @@ function applyProviderInstanceBranding(
       ? (explicitInstance.config as Readonly<Record<string, unknown>>)
       : null;
   if (config?.source === "local") {
-    return { ...entry, acpRegistryAgentId: undefined, acpRegistryIconUrl: undefined };
+    return {
+      ...entry,
+      isOmp: isOmpProvider(explicitInstance),
+      acpRegistryAgentId: undefined,
+      acpRegistryIconUrl: undefined,
+    };
   }
   const agentId = config?.agentId;
   const iconUrl = config?.registryIconUrl;
   return {
     ...entry,
+    isOmp: false,
     ...(typeof agentId === "string" && agentId.trim()
       ? { acpRegistryAgentId: agentId.trim() }
       : {}),

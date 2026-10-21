@@ -73,6 +73,7 @@ type ModelPickerItem = {
   instanceId: ProviderInstanceId;
   driverKind: ProviderDriverKind;
   instanceDisplayName: string;
+  isOmp?: boolean | undefined;
   instanceAccentColor?: string | undefined;
   acpRegistryAgentId?: string | undefined;
   acpRegistryIconUrl?: string | undefined;
@@ -563,6 +564,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           instanceId,
           driverKind: entry.driverKind,
           instanceDisplayName: entry.displayName,
+          isOmp: entry.isOmp,
           ...(entry.accentColor ? { instanceAccentColor: entry.accentColor } : {}),
           ...(entry.acpRegistryAgentId ? { acpRegistryAgentId: entry.acpRegistryAgentId } : {}),
           ...(entry.acpRegistryIconUrl ? { acpRegistryIconUrl: entry.acpRegistryIconUrl } : {}),
@@ -1003,6 +1005,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                     name={model.name}
                     subProvider={model.subProvider}
                     instanceId={model.instanceId}
+                    ompModel={model.isOmp ? model.slug : undefined}
                     driverKind={model.driverKind}
                     providerDisplayName={model.instanceDisplayName}
                     providerAccentColor={model.instanceAccentColor}

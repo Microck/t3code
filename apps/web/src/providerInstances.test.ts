@@ -564,3 +564,36 @@ describe("provider icon metadata", () => {
     expect(restoredEntry?.enabled).toBe(true);
   });
 });
+
+it("uses OMP model branding only while the instance runs OMP ACP", () => {
+  const instanceId = ProviderInstanceId.make("renamed-local-agent");
+  const driver = ProviderDriverKind.make("acpRegistry");
+  const snapshots = deriveProviderInstanceEntries([provider({ provider: driver, instanceId })]);
+  const omp = applyProviderInstanceSettings(
+    snapshots,
+    {
+      providerInstances: {
+        [instanceId]: {
+          driver,
+          enabled: true,
+          config: { source: "local", commandPath: "/bin/omp", commandArgs: ["acp"] },
+        },
+      },
+      projectSettingsOverrides: {},
+    },
+    null,
+  );
+  expect(omp[0]?.isOmp).toBe(true);
+  expect(omp[0]?.instanceId).toBe(instanceId);
+  const registry = applyProviderInstanceSettings(
+    omp,
+    {
+      providerInstances: {
+        [instanceId]: { driver, enabled: true, config: { source: "registry", agentId: "other" } },
+      },
+      projectSettingsOverrides: {},
+    },
+    null,
+  );
+  expect(registry[0]?.isOmp).toBe(false);
+});

@@ -14,6 +14,7 @@ import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 export const ModelListRow = memo(function ModelListRow(props: {
   index: number;
   slug: string;
+  ompModel?: string | undefined;
   name: string;
   subProvider?: string | undefined;
   instanceId: ProviderInstanceId;
@@ -52,6 +53,15 @@ export const ModelListRow = memo(function ModelListRow(props: {
     >
       <div className="min-w-0 flex-1 text-left">
         <div className="flex min-w-0 items-center gap-2">
+          {props.ompModel && !props.showProvider ? (
+            <ProviderInstanceIcon
+              driverKind={props.driverKind}
+              displayName={props.providerDisplayName}
+              ompModel={props.ompModel}
+              className="size-3"
+              iconClassName="size-3"
+            />
+          ) : null}
           <div className="min-w-0 truncate text-sm font-normal leading-snug">
             {getDisplayModelName(model)}
           </div>
@@ -72,6 +82,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
         {props.showProvider && (
           <div className="mt-1 flex items-center gap-1.5">
             <ProviderInstanceIcon
+              ompModel={props.ompModel}
               driverKind={props.driverKind}
               displayName={props.providerDisplayName}
               acpRegistryAgentId={props.acpRegistryAgentId}

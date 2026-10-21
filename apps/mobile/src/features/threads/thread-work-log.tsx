@@ -1,3 +1,4 @@
+import { ProviderIcon } from "../../components/ProviderIcon";
 import { Button } from "../../components/ui/Button";
 import { ThreadSubagentGroup } from "./thread-subagent-group";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -1569,7 +1570,13 @@ function OmpTaskProgressRows({ progress }: { readonly progress: OmpTaskProgress 
                   return next;
                 })
               }
+              className="flex-row items-center gap-1"
             >
+              <ProviderIcon
+                provider="acpRegistry"
+                ompModel={agent.resolvedModelIdentity ?? agent.resolvedModel}
+                size={12}
+              />
               <Text className="py-1 font-t3-medium text-2xs text-foreground">
                 {open ? "▾" : "▸"} {agent.id} · {agent.agent} · {ompAgentStatus(agent)}
                 {agent.currentTool ? ` · ${agent.currentTool}` : ""}
