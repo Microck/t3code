@@ -11,6 +11,10 @@ import {
   type DedupedBodySource,
 } from "@t3tools/shared/orchestrationV2DedupedBodies";
 import {
+  isActiveBackgroundTurnItem,
+  turnItemUpdateCanEndBackgroundWork,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
   createOrchestrationV2TurnItemVisibility,
   isOrchestrationV2TurnItemVisible,
 } from "@t3tools/shared/orchestrationV2Timeline";
@@ -379,12 +383,18 @@ export function applyOrchestrationV2ProjectionEvent(
       const deferredWork =
         itemIndex === -1 ? undefined : projection.turnItems[itemIndex]?.deferredWork;
       if (deferredWork !== undefined) payload = { ...payload, deferredWork };
-      if (
+      const belowWindow =
         partialTimeline &&
-        itemIndex === -1 &&
-        shouldDropMissingPartialTurnItem(projection, payload, latestLocalTurnOrdinal)
-      ) {
-        return projection;
+        (itemIndex === -1 || turnItemUpdateCanEndBackgroundWork(payload)) &&
+        shouldDropMissingPartialTurnItem(projection, payload, latestLocalTurnOrdinal);
+      // Active work remains available to the waiting bar without returning it to the timeline.
+      if (belowWindow) {
+        if (isActiveBackgroundTurnItem(payload)) {
+          return { ...base, turnItems: upsertEntity(base.turnItems, payload) };
+        }
+        return itemIndex !== -1
+          ? { ...base, turnItems: base.turnItems.filter((item) => item.id !== payload.id) }
+          : projection;
       }
       const turnItems =
         itemIndex === -1

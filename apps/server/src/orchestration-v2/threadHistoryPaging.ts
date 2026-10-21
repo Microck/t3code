@@ -5,6 +5,7 @@ import type {
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
+import { pendingBackgroundTurnItems } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 /**
  * Every window stops at the byte budget. A window that holds a user turn also
@@ -673,6 +674,13 @@ export function buildBoundedThreadProjection(input: {
     turnItemById.set(String(item.id), item);
   }
   for (const item of dependencyTurnItems) {
+    turnItemById.set(String(item.id), item);
+  }
+  // Running work from before the window still counts toward the thread's waiting state.
+  for (const item of pendingBackgroundTurnItems({
+    turnItems: controlProjection.turnItems,
+    runs: controlProjection.runs,
+  })) {
     turnItemById.set(String(item.id), item);
   }
   const turnItems = [...turnItemById.values()];
