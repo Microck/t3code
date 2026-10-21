@@ -27,6 +27,10 @@ const fixes: ReadonlyArray<{
     commit: "6d8b72966b9496b783a56f7835195fda87bdb374",
     label: "Distribution-aware remote update checks",
   },
+  {
+    commit: "0e07d97b6ecd762a5b37e588d60e42a6fea2e53d",
+    label: "Keep the release lookup internal",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
