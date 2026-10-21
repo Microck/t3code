@@ -1,3 +1,4 @@
+import { isOmpProvider } from "@t3tools/client-runtime/state/provider-instance-display";
 import {
   resolveEnvironmentMachineKind,
   type EnvironmentId,
@@ -10,7 +11,7 @@ import { Atom } from "effect/reactivity";
 export type ThreadListProvider = Pick<
   ServerProvider,
   "instanceId" | "driver" | "enabled" | "displayName" | "accentColor" | "iconUrl"
->;
+> & { readonly isOmp?: boolean };
 
 const capabilityKeys = [
   "threadSettlement",
@@ -32,6 +33,7 @@ function selectEnvironment(config: ServerConfig) {
         displayName,
         accentColor,
         iconUrl,
+        isOmp: isOmpProvider(config.settings.providerInstances[instanceId]),
       }),
     ),
     machineKind: resolveEnvironmentMachineKind(config),
@@ -55,6 +57,7 @@ function sameProviders(
         provider.enabled === other.enabled &&
         provider.displayName === other.displayName &&
         provider.accentColor === other.accentColor &&
+        provider.isOmp === other.isOmp &&
         provider.iconUrl === other.iconUrl
       );
     })

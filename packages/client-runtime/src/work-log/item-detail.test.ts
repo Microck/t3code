@@ -38,6 +38,30 @@ describe("OMP task progress", () => {
     expect(ompAgentStatus(agent)).toBe("running");
   });
 
+  it("preserves reported completion estimates without confusing them with context usage", () => {
+    for (const completionPercent of [0, 42.4, 100]) {
+      const task = readOmpTaskProgress({
+        details: {
+          progress: [
+            { ...progress, completionPercent, resolvedModelIdentity: "openai-codex/gpt-6-luna" },
+          ],
+        },
+      });
+      const agent = task!.agents[0]!;
+      expect(agent.completionPercent).toBe(completionPercent);
+      expect(agent.resolvedModelIdentity).toBe("openai-codex/gpt-6-luna");
+      expect(ompAgentStatus(agent)).toBe(`running · ~${Math.round(completionPercent)}%`);
+      expect(ompAgentMetrics(agent)).toContain("context 20K / 200K");
+      expect(ompAgentStatus({ ...agent, status: "completed" })).toBe("completed");
+      expect(ompAgentStatus({ ...agent, status: "failed" })).toBe("failed");
+    }
+    for (const completionPercent of [-1, 101, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        readOmpTaskProgress({ details: { progress: [{ ...progress, completionPercent }] } }),
+      ).toBeNull();
+    }
+  });
+
   it("keeps retry failures visible and recognizes completion and stop", () => {
     for (const status of ["completed", "failed", "aborted"]) {
       const task = readOmpTaskProgress({ details: { progress: [{ ...progress, status }] } });
