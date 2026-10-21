@@ -23,6 +23,10 @@ const fixes: ReadonlyArray<{
   { pr: 21801, commit: "e348de82fdca7720c85a5899e9f66832e409a0e4" },
   { pr: 22972, commit: "119c0da542105389858f50a665d44cd4fa42ed71" },
   {
+    commit: "a0c2bab73bfd075a57c59afc0f9472835d48e409",
+    label: "OMP choices and custom answers in one question step",
+  },
+  {
     commit: "ab1a5f30df2c5b9bc81d4735aa2cc9fcadf97372",
     label: "Native OMP task progress on web, desktop and mobile",
   },
