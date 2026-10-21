@@ -96,9 +96,17 @@ jobs:
       - run: vp install
       - name: Verify the carried fixes
         run: |
-          vp test run apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts -t 'closes unfinished ACP tools|terminalizes an empty|direct Stop on a deferred|background work when interrupted|quarantine drops late|recovers from .* cancellation'
+          vp test run apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts -t 'closes unfinished ACP tools|terminalizes an empty|direct Stop on a deferred|background work when interrupted|quarantine drops late|recovers from .* cancellation|preserves ACP agent tool labels|command description'
           vp test run apps/server/src/orchestration-v2/Adapters/AcpRegistryAdapterV2.test.ts packages/effect-acp/src/protocol.test.ts
           vp test run apps/mobile/src/features/threads/use-composer-command-menu.test.ts
+          vp test run apps/server/src/provider/acp/AcpJsonRpcConnection.test.ts apps/server/src/orchestration-v2/threadHistoryPaging.test.ts
+          vp test run packages/client-runtime/src/state/orchestrationV2Projection.test.ts packages/client-runtime/src/state/threadRelationships.test.ts packages/client-runtime/src/work-log/item-detail.test.ts
+          vp test run packages/shared/src/cliRelease.test.ts apps/web/src/state/cli-release.test.ts apps/web/src/components/sidebar/updateEverything.logic.test.ts
+          (cd apps/web && vp exec playwright install --with-deps chromium)
+          vp test run apps/web/src/components/chat/omp-task-progress.browser.test.tsx
+          vp exec tsc-rs --noEmit -p packages/client-runtime/tsconfig.json
+          vp exec tsc-rs --noEmit -p apps/web/tsconfig.json
+          vp exec tsc-rs --noEmit -p apps/mobile/tsconfig.json
           vp exec tsc-rs --noEmit -p packages/provider-acp/tsconfig.json
           vp exec tsc-rs --noEmit -p apps/server/tsconfig.json
       - run: node scripts/update-release-package-versions.ts "$VERSION"

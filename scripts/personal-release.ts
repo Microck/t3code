@@ -5,7 +5,11 @@ import * as NodeFS from "node:fs";
 
 const upstream = "pingdotgg/t3code";
 const fork = "Microck/t3code";
-const fixes = [
+const fixes: ReadonlyArray<{
+  readonly pr?: number;
+  readonly commit: string;
+  readonly label?: string;
+}> = [
   // This rebased copy preserves upstream's deletion of the obsolete web test.
   { pr: 22466, commit: "fd47810fb03908bf7af6b2c62fe6c036c75b820b" },
   { pr: 22842, commit: "7023133093f93a329532e8021bf9c7e43106d56d" },
@@ -13,6 +17,16 @@ const fixes = [
   { pr: 21439, commit: "c0057c6c51f2f24b39bd9c8ca7ce1800213df54f" },
   { pr: 21323, commit: "0791507a577396732fbc2d07933c736e1da629d9" },
   { pr: 22698, commit: "fca90d2e0d3b25f9ef74591a48cd73f119ba0a6d" },
+  { pr: 20363, commit: "3309cdfaa9f42a87eaf47e6f08fa075f3155201c" },
+  { pr: 21066, commit: "df744d509e241c09c31297f035cad170b3152ba0" },
+  {
+    commit: "ab1a5f30df2c5b9bc81d4735aa2cc9fcadf97372",
+    label: "Native OMP task progress on web, desktop and mobile",
+  },
+  {
+    commit: "6d8b72966b9496b783a56f7835195fda87bdb374",
+    label: "Distribution-aware remote update checks",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
@@ -141,11 +155,14 @@ function prepare() {
   git("switch", "-c", branch, "FETCH_HEAD");
   const applied = [];
   for (const fix of fixes) {
-    const pr = api<{ merged: boolean; merge_commit_sha: string | null }>(
-      `repos/${upstream}/pulls/${fix.pr}`,
-    );
+    const pr =
+      fix.pr === undefined
+        ? undefined
+        : api<{ merged: boolean; merge_commit_sha: string | null }>(
+            `repos/${upstream}/pulls/${fix.pr}`,
+          );
     if (
-      pr.merged &&
+      pr?.merged &&
       pr.merge_commit_sha &&
       NodeChildProcess.spawnSync("git", [
         "merge-base",
@@ -163,7 +180,11 @@ function prepare() {
       stdio: "inherit",
     });
     if (picked.status !== 0) resolveConflict(fix.commit, allowedFiles);
-    applied.push(`https://github.com/${upstream}/pull/${fix.pr}`);
+    applied.push(
+      fix.pr === undefined
+        ? `${fix.label}: https://github.com/${fork}/commit/${fix.commit}`
+        : `https://github.com/${upstream}/pull/${fix.pr}`,
+    );
   }
   // The CLI release index and downloads must point at the same distribution.
   replaceRequired(

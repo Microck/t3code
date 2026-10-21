@@ -6,7 +6,8 @@ the older `main` branch is preserved. The scheduled workflow checks every six
 hours and can also be dispatched manually.
 
 Each build starts from an official release, not upstream main. A fix is omitted
-only when that release contains its upstream merge commit. Copilot resolves
+only when that release contains its upstream merge commit. Personal features
+without an upstream PR remain in each build. Copilot resolves
 cherry-pick conflicts in the files changed by that fix. It cannot change release
 automation. Build and regression failures block publication. Failed runs create
 or update a single issue on this fork; the installed version remains available.
@@ -69,3 +70,21 @@ upstream source and database format are the same. After returning, future
 updates come from official T3. No fork environment variable is persisted.
 
 Initial publication does not install anything or restart a daily-driver server.
+
+## OMP ACP display and update checks
+
+The fork also carries #20363 (descriptive ACP tool labels) and #21066 (active work
+outside the history window). Existing fixes stay enabled.
+
+Expand an OMP task tool in the work log to see its agents. Each agent row shows
+its status and current tool; expand it for the model, task, recent tools and
+output, cumulative tokens, context use, cost and duration. This reads the
+structured progress OMP already sends through ACP. It does not create T3 child
+threads or add native-agent stop/resume controls. The shared decoder supports
+web, desktop and mobile; this workflow packages Windows and Linux only.
+
+Update everything checks the same GitHub distribution as the CLI installer,
+not npm. Standalone servers need the exact target version's platform archive
+and SHA256SUMS before they are offered an update. Desktop-managed machines
+still follow their own app's update feed. In particular, an official Mac app
+stays official until a fork Mac build is installed separately.
