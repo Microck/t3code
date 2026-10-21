@@ -31,6 +31,10 @@ const fixes: ReadonlyArray<{
     commit: "0e07d97b6ecd762a5b37e588d60e42a6fea2e53d",
     label: "Keep the release lookup internal",
   },
+  {
+    commit: "1d6efdce95a7f1245a25b09984ca0d1d2700caaa",
+    label: "Node ESM import for the native progress regression",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
