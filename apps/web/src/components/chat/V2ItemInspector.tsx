@@ -5,6 +5,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  readOmpTaskProgress,
   toolCallLines,
   turnItemDetailRevision,
   turnItemNeedsDetailFetch,
@@ -31,6 +32,8 @@ import { CommandOutputPanel, useCommandOutputStreaming } from "./CommandOutputPa
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ShellCommandBlock } from "./ShellCommandBlock";
+
+import { OmpTaskProgressDisplay } from "./omp-task-progress";
 
 interface V2ItemInspectorProps {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
@@ -128,10 +131,12 @@ function useFetchedTurnItem(
   );
   const fetchedItem = detail.data?.item;
   const item = fetchedItem?.type === wireItem.type ? fetchedItem : wireItem;
+  const ompTask = item.type === "dynamic_tool" ? readOmpTaskProgress(item.output) : null;
   return {
     item,
+    ompTask,
     output: {
-      output: turnItemOutputText(item),
+      output: ompTask ? ompTask.text : turnItemOutputText(item),
       images: turnItemOutputImages(item),
       environmentId,
       pending: item === wireItem && detail.isPending,
@@ -379,6 +384,14 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
         <ToolCallBody
           toolName={item.toolName}
           args={item.input}
+          outputSlot={
+            fetched.ompTask ? (
+              <>
+                <OmpTaskProgressDisplay progress={fetched.ompTask} />
+                <ToolOutput {...outputState} />
+              </>
+            ) : undefined
+          }
           {...outputState}
           onImageExpand={props.onImageExpand}
         />
