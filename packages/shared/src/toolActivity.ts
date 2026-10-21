@@ -408,6 +408,23 @@ export interface ToolActivityPresentation {
   readonly detail?: string | undefined;
 }
 
+const CATEGORY_TOOL_TITLES = new Set([
+  "terminal",
+  "command",
+  "run command",
+  "ran command",
+  "shell",
+  "read",
+  "read file",
+  "reading file",
+  "tool",
+  "tool call",
+]);
+
+function descriptiveToolTitle(title: string | undefined): string | undefined {
+  return title && !CATEGORY_TOOL_TITLES.has(title.toLowerCase()) ? title : undefined;
+}
+
 export function deriveToolActivityPresentation(
   input: ToolActivityPresentationInput,
 ): ToolActivityPresentation {
@@ -423,10 +440,13 @@ export function deriveToolActivityPresentation(
     data,
   });
 
+  const descriptiveTitle = descriptiveToolTitle(title);
+
   if (action === "command") {
+    const commandDetail = command ?? descriptiveTitle;
     return {
       summary: "Ran command",
-      ...(command ? { detail: command } : {}),
+      ...(commandDetail ? { detail: commandDetail } : {}),
     };
   }
 
@@ -436,9 +456,7 @@ export function deriveToolActivityPresentation(
         summary: formatReadToolLabel(primaryPath),
       };
     }
-    return {
-      summary: "Read file",
-    };
+    return { summary: descriptiveTitle ?? "Read file" };
   }
 
   if (action === "file_change") {

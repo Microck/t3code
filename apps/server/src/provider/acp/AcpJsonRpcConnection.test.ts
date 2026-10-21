@@ -167,13 +167,17 @@ describe("AcpSessionRuntime", () => {
         _meta: { nativeCancel: true },
       });
       expect(
-        events.some(
-          (event) =>
-            event._tag === "ToolCallUpdated" &&
-            event.toolCall.status === "failed" &&
-            event.toolCall.detail === "Cancelled.",
+        events.find(
+          (event) => event._tag === "ToolCallUpdated" && event.toolCall.status === "failed",
         ),
-      ).toBe(true);
+      ).toMatchObject({
+        toolCall: {
+          detail: "Long command",
+          data: {
+            content: [{ type: "content", content: { type: "text", text: "Cancelled." } }],
+          },
+        },
+      });
       const cancelledDelta = events.find(
         (event) => event._tag === "ContentDelta" && event.text === "Request cancelled.",
       );
