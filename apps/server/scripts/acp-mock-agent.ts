@@ -32,6 +32,7 @@ const emitBackgroundToolDuringAnswer =
 const emitMcpToolApprovalElicitation =
   process.env.T3_ACP_EMIT_MCP_TOOL_APPROVAL_ELICITATION === "1";
 const grokKillTaskShape = process.env.T3_ACP_GROK_KILL_TASK_SHAPE;
+const activeToolOutcome = process.env.T3_ACP_ACTIVE_TOOL_OUTCOME;
 const emitGrokBackgroundTaskPoll = process.env.T3_ACP_GROK_BACKGROUND_TASK_COMPLETION === "poll";
 const emitForeignSessionUpdates = process.env.T3_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
 const omitInitializeModelState = process.env.T3_ACP_OMIT_INITIALIZE_MODEL_STATE === "1";
@@ -1279,6 +1280,48 @@ const program = Effect.gen(function* () {
         return yield* Effect.never;
       }
 
+      if (activeToolOutcome !== undefined) {
+        const toolCallId = "tool-call-long-running-1";
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId,
+            title: "Long-running tool",
+            kind: "execute",
+            status: "pending",
+            rawInput: { command: ["long-running-tool"] },
+          },
+        });
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId,
+            status: "in_progress",
+          },
+        });
+        if (activeToolOutcome !== undefined) {
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "tool-call-pending-wait",
+              title: "Waiting for task",
+              kind: "other",
+              status: "pending",
+              rawInput: { taskId: "framer" },
+            },
+          });
+        }
+        if (activeToolOutcome === "failed") {
+          return yield* AcpError.AcpRequestError.internalError("Prompt failed with an open tool");
+        }
+        if (activeToolOutcome === "cancelled" || activeToolOutcome === "end_turn") {
+          return yield* finishPrompt(requestedSessionId, activeToolOutcome);
+        }
+        return yield* Effect.never;
+      }
       if (emitEmptySuccessfulBash || (emitEmptySuccessfulBashThenHang && promptCount === 1)) {
         const update = {
           sessionId: requestedSessionId,
