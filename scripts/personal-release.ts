@@ -31,6 +31,10 @@ const fixes: ReadonlyArray<{
     label: "Native OMP task progress on web, desktop and mobile",
   },
   {
+    commit: "4d0ef330fdaafe9141eee7d2446616c9831989b1",
+    label: "OMP model family logos and reported completion estimates",
+  },
+  {
     commit: "6d8b72966b9496b783a56f7835195fda87bdb374",
     label: "Distribution-aware remote update checks",
   },

@@ -93,6 +93,12 @@ structured progress OMP already sends through ACP. It does not create T3 child
 threads or add native-agent stop/resume controls. The shared decoder supports
 web, desktop and mobile; this workflow packages Windows and Linux only.
 
+Task rows preserve OMP's optional completion estimate, shown as `~42%` while running.
+The CLI's completion probes are disabled in ACP, so an estimate normally is not
+available; this fork does not enable probes or add model requests. Model logos in
+the picker, composer, sidebar and task rows follow the reported model family
+(OpenAI, Anthropic, Gemini or Grok), while unknown families retain the agent icon.
+
 Update everything checks the same GitHub distribution as the CLI installer,
 not npm. Standalone servers need the exact target version's platform archive
 and SHA256SUMS before they are offered an update. Desktop-managed machines
