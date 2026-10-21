@@ -30,7 +30,7 @@ function replaceRequired(file: string, before: string, after: string) {
   NodeFS.writeFileSync(file, source.replace(before, after));
 }
 
-export function resolveConflict(commit: string, allowedFiles: ReadonlyArray<string>) {
+function resolveConflict(commit: string, allowedFiles: ReadonlyArray<string>) {
   if (!process.env.COPILOT_GITHUB_TOKEN)
     throw new Error("Set the COPILOT_GITHUB_TOKEN Actions secret to resolve conflicts.");
   const conflicts = git("diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean);

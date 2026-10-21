@@ -15,6 +15,12 @@ Set the Actions secret `COPILOT_GITHUB_TOKEN` to a fine-grained token with the
 account permission **Copilot Requests**. Repository writes use the separate
 built-in Actions token. Never use a general repository token as Copilot's token.
 
+Keep the account budgets for **All AI Credit SKUs** and **Actions** at $0 with
+usage blocking enabled. These were verified during setup. Exhausting the
+included allowance must stop the workflow, not enable paid overage. The workflow
+uses standard GitHub-hosted runners on this public repository, with one
+ten-minute Copilot attempt per conflicted fix and no automatic model retries.
+
 The workflow builds Windows x64 desktop, Linux x64 (for its embedded WSL
 runtime), and Linux ARM64 (for Ashburn). It reuses upstream's packaging and smoke
 checks. Windows builds are unsigned because this fork has no signing identity.
