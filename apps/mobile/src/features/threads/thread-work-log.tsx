@@ -1552,6 +1552,74 @@ function toolGroupSummarySymbolName(kind: ToolGroupSummaryKind): AppSymbolName {
 
 function OmpTaskProgressRows({ progress }: { readonly progress: OmpTaskProgress }) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleExpanded = (id: string) =>
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  if (progress.kind === "jobs")
+    return (
+      <View className="gap-2 py-1" accessibilityLabel="Background jobs">
+        {progress.jobs.map((job) => {
+          const open = expanded.has(job.id);
+          return (
+            <View key={job.id} className="gap-1">
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ expanded: open }}
+                accessibilityLabel={`${job.label || job.id}, ${ompAgentStatus(job)}`}
+                onPress={() => toggleExpanded(job.id)}
+                className="flex-row items-center gap-1"
+              >
+                <ProviderIcon
+                  provider="acpRegistry"
+                  ompModel={job.resolvedModelIdentity ?? job.resolvedModel}
+                  size={12}
+                />
+                <Text className="py-1 font-t3-medium text-2xs text-foreground">
+                  {open ? "▾" : "▸"} {job.label || job.id} · {ompAgentStatus(job)} ·{" "}
+                  {Math.floor(job.durationMs / 1000)}s
+                </Text>
+              </Pressable>
+              {open ? (
+                <View className="gap-1 pl-3">
+                  <Text selectable className="text-2xs text-foreground-muted">
+                    {job.id} · {job.type}
+                  </Text>
+                  {(job.resolvedModelIdentity ?? job.resolvedModel) ? (
+                    <Text selectable className="text-2xs text-foreground-muted">
+                      {job.resolvedModelIdentity ?? job.resolvedModel}
+                    </Text>
+                  ) : null}
+                  {job.resolvedThinkingLevel ? (
+                    <Text className="text-2xs text-foreground-muted">
+                      Reasoning: {job.resolvedThinkingLevel}
+                    </Text>
+                  ) : null}
+                  {job.exitCode !== undefined ? (
+                    <Text className="text-2xs text-foreground-muted">
+                      Exit code: {job.exitCode}
+                    </Text>
+                  ) : null}
+                  {job.errorText ? (
+                    <Text selectable className="font-mono text-2xs text-danger-foreground">
+                      {job.errorText}
+                    </Text>
+                  ) : null}
+                  {job.resultText ? (
+                    <Text selectable className="font-mono text-2xs text-foreground">
+                      {job.resultText}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+          );
+        })}
+      </View>
+    );
   return (
     <View className="gap-2 py-1" accessibilityLabel="Task agents">
       {progress.agents.map((agent) => {
@@ -1562,14 +1630,7 @@ function OmpTaskProgressRows({ progress }: { readonly progress: OmpTaskProgress 
               accessibilityRole="button"
               accessibilityState={{ expanded: open }}
               accessibilityLabel={`${agent.id}, ${ompAgentStatus(agent)}`}
-              onPress={() =>
-                setExpanded((current) => {
-                  const next = new Set(current);
-                  if (next.has(agent.id)) next.delete(agent.id);
-                  else next.add(agent.id);
-                  return next;
-                })
-              }
+              onPress={() => toggleExpanded(agent.id)}
               className="flex-row items-center gap-1"
             >
               <ProviderIcon
