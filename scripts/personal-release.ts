@@ -145,6 +145,40 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+/** Publish application source without importing workflow edits or their history. */
+export function createBuildSnapshot(input: {
+  readonly repoPath: string;
+  readonly automationCommit: string;
+  readonly upstreamTag: string;
+}): string {
+  const readGit = (...args: string[]) =>
+    NodeChildProcess.execFileSync("git", args, { cwd: input.repoPath, encoding: "utf8" }).trim();
+  const replaceSubtree = (tree: string, name: string, child: string) => {
+    const entries = readGit("ls-tree", "-z", tree)
+      .split("\0")
+      .filter((entry) => entry && !entry.endsWith(`\t${name}`));
+    entries.push(`040000 tree ${child}\t${name}`);
+    return NodeChildProcess.execFileSync("git", ["mktree", "-z"], {
+      cwd: input.repoPath,
+      encoding: "utf8",
+      input: `${entries.join("\0")}\0`,
+    }).trim();
+  };
+  const workflows = readGit("rev-parse", `${input.automationCommit}:.github/workflows`);
+  const github = replaceSubtree("HEAD:.github", "workflows", workflows);
+  const tree = replaceSubtree("HEAD", ".github", github);
+  // The only new commit is parented by an existing fork commit. Reverting workflow
+  // files on top of upstream history would still introduce those workflow edits.
+  return readGit(
+    "commit-tree",
+    tree,
+    "-p",
+    input.automationCommit,
+    "-m",
+    `build: snapshot ${input.upstreamTag} with personal fixes`,
+  );
+}
+
 function prepare() {
   if (process.env.GITHUB_REPOSITORY !== fork)
     throw new Error("This workflow belongs to the personal fork only.");
@@ -162,6 +196,7 @@ function prepare() {
     return;
   }
   const upstreamVersion = release.tag_name.slice(1);
+  const automationCommit = git("rev-parse", "HEAD");
   const returnScripts = ["ps1", "sh"].map((extension) => ({
     extension,
     source: NodeFS.readFileSync(`${import.meta.dirname}/personal-return.${extension}`, "utf8"),
@@ -197,6 +232,10 @@ function prepare() {
     const allowedFiles = git("diff-tree", "--no-commit-id", "--name-only", "-r", fix.commit)
       .split("\n")
       .filter(Boolean);
+    if (allowedFiles.some((file) => file.startsWith(".github/workflows/")))
+      throw new Error(
+        "Carried fixes cannot edit workflows; update personal-updates automation instead.",
+      );
     const picked = NodeChildProcess.spawnSync("git", ["cherry-pick", fix.commit], {
       stdio: "inherit",
     });
@@ -225,8 +264,12 @@ function prepare() {
   );
   git("add", "packages/shared/src/cliRelease.ts", "scripts/install.sh", "scripts/install.ps1");
   git("commit", "-m", "build: follow personal release feeds");
-  const source = git("rev-parse", "HEAD");
-  git("push", "origin", `HEAD:refs/heads/${branch}`);
+  const source = createBuildSnapshot({
+    repoPath: process.cwd(),
+    automationCommit,
+    upstreamTag: release.tag_name,
+  });
+  git("push", "origin", `${source}:refs/heads/${branch}`);
   const notes = `${marker}\n\nOfficial source version: ${upstreamVersion}\nFork version: ${version}\n\nCarried fixes:\n${applied.map((url) => `- ${url}`).join("\n") || "- All tracked fixes are upstream."}\n\nWindows x64 desktop and Linux ARM64 server. Windows installer is unsigned.\n\nReturn to official T3 without uninstalling or deleting data: install the official ${upstreamVersion} desktop installer over this build. For the server, use the official installer and its update command with --allow-downgrade --yes. Full instructions: https://github.com/${fork}/blob/personal-updates/docs/operations/personal-releases.md\n`;
   NodeFS.writeFileSync(process.env.RUNNER_TEMP + "/personal-release-notes.md", notes);
   for (const script of returnScripts) {
