@@ -99,6 +99,10 @@ available; this fork does not enable probes or add model requests. Model logos i
 the picker, composer, sidebar and task rows follow the reported model family
 (OpenAI, Anthropic, Gemini or Grok), while unknown families retain the agent icon.
 
+OMP wait tools also show their native job snapshots as compact status rows.
+Task, shell and evaluation jobs retain their results, errors and exit codes;
+wait snapshots do not invent token counts or detailed task metrics.
+
 Update everything checks the same GitHub distribution as the CLI installer,
 not npm. Standalone servers need the exact target version's platform archive
 and SHA256SUMS before they are offered an update. Desktop-managed machines
