@@ -44,15 +44,41 @@ const OmpAgentProgress = Schema.Struct({
 export type OmpAgentProgress = typeof OmpAgentProgress.Type;
 const decodeOmpProgress = Schema.decodeUnknownOption(Schema.Array(OmpAgentProgress));
 
-export interface OmpTaskProgress {
-  readonly agents: ReadonlyArray<OmpAgentProgress>;
-  readonly text: string | null;
-}
+const OmpWaitJob = Schema.Struct({
+  id: Schema.String,
+  type: Schema.Literals(["task", "bash", "eval"]),
+  status: Schema.Literals(["running", "completed", "failed", "cancelled"]),
+  label: Schema.String,
+  durationMs: Schema.Number,
+  resolvedModel: Schema.optionalKey(Schema.String),
+  resolvedModelIdentity: Schema.optionalKey(Schema.String),
+  resolvedThinkingLevel: Schema.optionalKey(Schema.String),
+  completionPercent: Schema.optionalKey(
+    Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+  ),
+  exitCode: Schema.optionalKey(Schema.Number),
+  resultText: Schema.optionalKey(Schema.String),
+  errorText: Schema.optionalKey(Schema.String),
+});
+type OmpWaitJob = typeof OmpWaitJob.Type;
+const decodeOmpWait = Schema.decodeUnknownOption(
+  Schema.Struct({ op: Schema.Literal("wait"), jobs: Schema.Array(OmpWaitJob) }),
+);
+
+export type OmpTaskProgress = (
+  | { readonly kind: "progress"; readonly agents: ReadonlyArray<OmpAgentProgress> }
+  | { readonly kind: "jobs"; readonly jobs: ReadonlyArray<OmpWaitJob> }
+) & { readonly text: string | null };
 
 export function readOmpTaskProgress(output: unknown): OmpTaskProgress | null {
   if (!isRecord(output) || !isRecord(output.details)) return null;
   const agents = Option.getOrNull(decodeOmpProgress(output.details.progress));
-  return agents?.length ? { agents, text: formatToolValue(output.content) } : null;
+  if (agents?.length) return { kind: "progress", agents, text: formatToolValue(output.content) };
+  // Wait snapshots are a different native contract, not incomplete task progress.
+  const wait = Option.getOrNull(decodeOmpWait(output.details));
+  return wait?.jobs.length
+    ? { kind: "jobs", jobs: wait.jobs, text: formatToolValue(output.content) }
+    : null;
 }
 
 const compactCount = new Intl.NumberFormat("en-US", {
@@ -74,8 +100,10 @@ export function ompAgentMetrics(agent: OmpAgentProgress): string {
   ].join(" · ");
 }
 
-export function ompAgentStatus(agent: OmpAgentProgress): string {
-  if (agent.retryState) return `Retrying (${agent.retryState.attempt})`;
+export function ompAgentStatus(
+  agent: Pick<OmpAgentProgress, "status" | "retryState" | "completionPercent"> | OmpWaitJob,
+): string {
+  if ("retryState" in agent && agent.retryState) return `Retrying (${agent.retryState.attempt})`;
   if (agent.status === "running" && agent.completionPercent !== undefined)
     return `running · ~${Math.round(agent.completionPercent)}%`;
   return agent.status === "aborted" ? "Stopped" : agent.status;

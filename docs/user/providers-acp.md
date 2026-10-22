@@ -101,6 +101,12 @@ completion probes currently run only in its interactive CLI, so ACP tasks usuall
 have no estimate. T3 does not start probes or make extra model requests. Context
 token counts remain separate from task completion.
 
+Expand an OMP wait tool to see its reported background jobs as status rows,
+including model identity and elapsed time. Task, shell and evaluation jobs stay
+visible together. Expand a job for its model, result or error. Wait summaries do
+not include task token counts or tool history; those remain in the original task
+tool's detailed progress.
+
 ## Questions
 
 For local `omp acp` providers, each choice question includes a custom-answer
