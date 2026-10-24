@@ -52,6 +52,10 @@ const fixes: ReadonlyArray<{
     commit: "87d2500ab936ef32dde6ec5dc2541d56d94559e5",
     label: "Recover shared Codex sessions after the app-server process exits",
   },
+  {
+    commit: "ee24af6141a68d93318b31a57b737a0b85eb50b8",
+    label: "Package mirror failover on GitHub-hosted runners",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
