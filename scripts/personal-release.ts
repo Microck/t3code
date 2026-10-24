@@ -56,6 +56,10 @@ const fixes: ReadonlyArray<{
     commit: "ee24af6141a68d93318b31a57b737a0b85eb50b8",
     label: "Package mirror failover on GitHub-hosted runners",
   },
+  {
+    commit: "75d44d29be896062910d0c2d9fa3ba2dd3afa5af",
+    label: "Discover every advertised ACP command and skill without a count cap",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
