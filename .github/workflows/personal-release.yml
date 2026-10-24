@@ -108,11 +108,11 @@ jobs:
           vp test run packages/shared/src/cliRelease.test.ts apps/web/src/state/cli-release.test.ts apps/web/src/components/sidebar/updateEverything.logic.test.ts
           (cd apps/web && vp exec playwright install --with-deps chromium)
           vp test run apps/web/src/components/chat/omp-task-progress.browser.test.tsx
-          vp exec tsc-rs --noEmit -p packages/client-runtime/tsconfig.json
-          vp exec tsc-rs --noEmit -p apps/web/tsconfig.json
-          vp exec tsc-rs --noEmit -p apps/mobile/tsconfig.json
-          vp exec tsc-rs --noEmit -p packages/provider-acp/tsconfig.json
-          vp exec tsc-rs --noEmit -p apps/server/tsconfig.json
+          (cd packages/client-runtime && vp run typecheck)
+          (cd apps/web && vp run typecheck)
+          (cd apps/mobile && vp run typecheck)
+          (cd packages/provider-acp && vp run typecheck)
+          (cd apps/server && vp run typecheck)
       - run: node scripts/update-release-package-versions.ts "$VERSION"
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -249,7 +249,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         shell: bash
         run: |
-          if jq -e 'any(.[]; .result == "failure" || .result == "cancelled")' <<< "$RESULTS" >/dev/null; then
+          if jq -e 'any(.[]; .result == "failure" or .result == "cancelled")' <<< "$RESULTS" >/dev/null; then
             issue=$(gh issue list --repo Microck/t3code --state open --search '"Personal update needs attention" in:title' --json number --jq '.[0].number // empty')
             if [[ -n "$issue" ]]; then
               gh issue comment "$issue" --repo Microck/t3code --body "Update withheld. The installed version is unchanged. Logs: $RUN_URL"
