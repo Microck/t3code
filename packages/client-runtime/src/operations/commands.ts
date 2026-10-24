@@ -185,6 +185,7 @@ export interface InterruptThreadTurnInput extends ThreadCommandInput {
 export interface RespondToThreadApprovalInput extends ThreadCommandInput {
   readonly requestId: RuntimeRequestId;
   readonly decision: ProviderApprovalDecision;
+  readonly feedback?: string;
 }
 
 export interface RespondToThreadUserInputInput extends ThreadCommandInput {
@@ -217,6 +218,10 @@ export interface MergeThreadBackInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
   readonly targetThreadId: ThreadId;
   readonly runId: RunId;
+}
+
+export interface ResumeThreadQueueInput extends ThreadCommandInput {
+  readonly runId?: RunId;
 }
 
 export interface ReorderQueuedRunInput extends ThreadCommandInput {
@@ -869,6 +874,7 @@ export const respondToThreadApproval = Effect.fn("EnvironmentCommands.respondToT
       threadId: input.threadId,
       requestId: input.requestId,
       decision: input.decision,
+      ...(input.feedback === undefined ? {} : { feedback: input.feedback }),
     });
   },
 );
@@ -994,10 +1000,12 @@ export const mergeThreadBack = Effect.fn("EnvironmentCommands.mergeThreadBack")(
 });
 
 export const resumeThreadQueue = Effect.fn("EnvironmentCommands.resumeThreadQueue")(function* (
-  input: ThreadCommandInput,
+  input: ResumeThreadQueueInput,
 ) {
   return yield* dispatch({
-    type: "queue.resume",
+    ...(input.runId === undefined
+      ? { type: "queue.resume" as const }
+      : { type: "queued-run.start" as const, runId: input.runId }),
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
   });

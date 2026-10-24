@@ -34,16 +34,9 @@ import { PullRequestAvatar } from "./PullRequestPresentation";
 import { pullRequestTarget, type PullRequestParams } from "./usePullRequestDiff";
 
 function ReviewerScrollView(props: ScrollViewProps) {
-  const insets = useSafeAreaInsets();
   return (
     <ScrollViewMarker style={{ flex: 1 }}>
-      <ScrollView
-        {...props}
-        automaticallyAdjustContentInsets={false}
-        contentInsetAdjustmentBehavior="never"
-        contentInset={{ top: insets.top }}
-        contentOffset={props.contentOffset ?? { x: 0, y: -insets.top }}
-      />
+      <ScrollView {...props} contentInsetAdjustmentBehavior="automatic" />
     </ScrollViewMarker>
   );
 }

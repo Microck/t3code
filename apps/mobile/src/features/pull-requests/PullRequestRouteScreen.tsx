@@ -63,6 +63,7 @@ import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { AndroidWorkspaceSidebarButton } from "../layout/workspace-sidebar-toolbar";
+import { useWorkspaceSidebarHeaderItem } from "../layout/useWorkspaceSidebarHeaderItem";
 import { useAndroidWorkspaceBack } from "../workspace/useAndroidWorkspaceNavigation";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
@@ -116,15 +117,9 @@ import { usePullRequestEnvironmentFallback } from "./usePullRequestEnvironmentFa
 const EMPTY_IDS: readonly string[] = [];
 
 function PullRequestTabScrollView(props: ScrollViewProps) {
-  const insets = useSafeAreaInsets();
   return (
     <ScrollViewMarker style={{ flex: 1 }}>
-      <ScrollView
-        {...props}
-        automaticallyAdjustContentInsets={false}
-        contentInsetAdjustmentBehavior="never"
-        contentOffset={props.contentOffset ?? { x: 0, y: -insets.top }}
-      />
+      <ScrollView {...props} />
     </ScrollViewMarker>
   );
 }
@@ -279,6 +274,7 @@ function usePullRequestToolbarHeight(bottomInset: number) {
 export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestParams>) {
   const returnToList = useAndroidWorkspaceBack("pullRequests");
   const { layout } = useAdaptiveWorkspaceLayout();
+  const sidebarHeaderItem = useWorkspaceSidebarHeaderItem();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const [toolbarHeight, setToolbarHeight] = usePullRequestToolbarHeight(insets.bottom);
@@ -299,6 +295,18 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const [headerHeight, setHeaderHeight] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const scrollViews = useRef<Partial<Record<typeof section, LegendListRef | null>>>({});
+  // AnimatedLegendList re-attaches its handle and sets state whenever its ref changes,
+  // so an inline ref in the tab map loops the screen into "Maximum update depth exceeded".
+  const [listRefs] = useState(() => {
+    const listRef = (tab: typeof section) => (list: LegendListRef | null) => {
+      scrollViews.current[tab] = list;
+    };
+    return {
+      overview: listRef("overview"),
+      guide: listRef("guide"),
+      activity: listRef("activity"),
+    };
+  });
   const selectSection = (next: typeof section) => {
     if (next === section) return;
     scrollOffsets.current[section] = currentScrollOffset.current;
@@ -391,7 +399,9 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
             unstable_headerSubtitle: connected
               ? params.repository
               : `${params.repository} · Offline`,
+            unstable_headerLeftItems: layout.usesSplitView ? () => [sidebarHeaderItem] : undefined,
           }}
+          optionsVersion={[layout.usesSplitView, sidebarHeaderItem]}
         />
         {Platform.OS === "android" ? (
           <AndroidScreenHeader
@@ -545,10 +555,10 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                 importantForAccessibility={section === tab ? "auto" : "no-hide-descendants"}
               >
                 <AnimatedLegendList
-                  ref={(list) => {
-                    scrollViews.current[tab] = list;
-                  }}
-                  initialScrollOffset={-insets.top}
+                  ref={listRefs[tab]}
+                  // The scroll view owns its resting offset. LegendList keeps the first
+                  // initialScrollOffset it gets, and the first render has the window's top
+                  // inset (0 on the folded iPhone Duo), not the header's.
                   onScroll={(event) => {
                     const offset = event.nativeEvent.contentOffset.y;
                     scrollOffsets.current[tab] = offset;
@@ -558,10 +568,9 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                   renderScrollComponent={
                     Platform.OS === "ios" ? PullRequestTabScrollView : undefined
                   }
-                  contentInsetAdjustmentBehavior="never"
-                  contentInset={
-                    Platform.OS === "ios" ? { top: insets.top, bottom: insets.bottom } : undefined
-                  }
+                  // UIKit owns the bar's inset, so a minimizing bar and a resized column
+                  // move the list in the same frame as the bar.
+                  contentInsetAdjustmentBehavior="automatic"
                   contentInsetStartAdjustment={Platform.OS === "ios" ? insets.top : 0}
                   refreshControl={
                     <RefreshControl
