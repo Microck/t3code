@@ -355,10 +355,12 @@ jobs:
         if: inputs.platform == 'linux'
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev pkg-config
+          # A stalled mirror must not hold publication after the CLI archives pass.
+          apt_options=(-o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=2)
+          sudo apt-get "${apt_options[@]}" update
+          sudo apt-get "${apt_options[@]}" install -y libsecret-1-dev pkg-config
           if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
-              sudo apt-get install -y imagemagick
+              sudo apt-get "${apt_options[@]}" install -y imagemagick
           fi
 
           if command -v magick >/dev/null 2>&1; then
