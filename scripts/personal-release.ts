@@ -48,6 +48,10 @@ const fixes: ReadonlyArray<{
   {
     commit: "1d6efdce95a7f1245a25b09984ca0d1d2700caaa",
   },
+  {
+    commit: "87d2500ab936ef32dde6ec5dc2541d56d94559e5",
+    label: "Recover shared Codex sessions after the app-server process exits",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
