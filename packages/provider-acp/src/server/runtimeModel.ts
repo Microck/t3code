@@ -797,7 +797,7 @@ function normalizeToolKind(kind: unknown): string | undefined {
   return typeof kind === "string" && kind.trim().length > 0 ? kind.trim() : undefined;
 }
 
-export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
+function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
   switch (kind) {
     case "read":
       return "dynamic_tool_call";

@@ -22,7 +22,7 @@ import {
 } from "@t3tools/client-runtime/operations/projects";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
-import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
+import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import {
   canPreloadBrowsePath,
   createBrowseNavigationCoordinator,
@@ -219,7 +219,7 @@ import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
-import { searchSettings, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
+import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
 import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/command";
@@ -232,11 +232,13 @@ import { buildSidebarProjectPickerEntries } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
+import { threadRecentUse } from "@t3tools/shared/paletteSearch";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 
 export function CommandPalette({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
   const [state, dispatch] = useReducer(reduceCommandPaletteUiState, {
     open: false,
     mode: "command",
@@ -287,6 +289,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           previewFocus: isPreviewFocused(),
           previewOpen,
           modelPickerOpen: composerHandleRef.current?.isModelPickerOpen() ?? false,
+          usagePageOpen,
         },
       });
       if (command === "appearance.cycle") {
@@ -352,6 +355,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     theme,
     themeHalves,
     toggleMode,
+    usagePageOpen,
   ]);
 
   useEffect(
@@ -892,9 +896,25 @@ function OpenCommandPaletteDialog(props: {
     ];
   })();
 
-  const { threadItems: allThreadItems, isSearchPending: isThreadSearchPending } =
-    useCommandPaletteThreadItems({ activeThreadId, threadSearchQuery });
-  const recentThreadItems = allThreadItems.slice(0, RECENT_THREAD_LIMIT);
+  const {
+    threadItems: allThreadItems,
+    threadMessageItems,
+    now: searchNow,
+    isSearchPending: isThreadSearchPending,
+  } = useCommandPaletteThreadItems({ activeThread: activeThread ?? null, threadSearchQuery });
+  // Recent means used recently: written in or opened, whichever is later. The
+  // open thread would always lead that list, so it is left out.
+  const activeThreadValue = activeThread
+    ? `thread:${activeThread.environmentId}:${activeThread.id}`
+    : null;
+  const recentThreadItems = allThreadItems
+    .filter((item) => item.value !== activeThreadValue)
+    .toSorted(
+      (left, right) =>
+        (right.threadSearch ? threadRecentUse(right.threadSearch) : 0) -
+        (left.threadSearch ? threadRecentUse(left.threadSearch) : 0),
+    )
+    .slice(0, RECENT_THREAD_LIMIT);
 
   // Stable so the item builders that capture it during render never see the
   // highlight ref it writes.
@@ -1197,6 +1217,7 @@ function OpenCommandPaletteDialog(props: {
             New thread in <span className="font-semibold">{activeProjectTitle}</span>
           </>
         ),
+        searchTitle: `New thread in ${activeProjectTitle}`,
         icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
         shortcutCommand: "chat.newLocal",
         run: async () => {
@@ -1300,7 +1321,10 @@ function OpenCommandPaletteDialog(props: {
     actionItems.push({
       kind: "action",
       value: "action:copy-thread-reference",
-      searchTerms: ["copy", "pull request", "pr link", "thread id", "reference"],
+      searchTerms:
+        activeThreadReferenceCopyTarget.kind === "pull-request"
+          ? ["copy", "pull request", "link", "reference"]
+          : ["copy", "thread id", "reference"],
       title:
         activeThreadReferenceCopyTarget.kind === "pull-request" ? "Copy PR link" : "Copy thread ID",
       description: activeThreadReferenceCopyTarget.value,
@@ -1516,7 +1540,22 @@ function OpenCommandPaletteDialog(props: {
     actionItems.push({
       kind: "action",
       value: "action:pull-requests",
-      searchTerms: ["pull requests", "prs", "pr", "github", "review", "merge", "branch"],
+      searchTerms: [
+        ...new Set(
+          sourceControlClients.definitions.flatMap((definition) => {
+            const shortLabel = definition.changeRequest.shortLabel.toLowerCase();
+            return [
+              definition.changeRequest.plural,
+              `${shortLabel}s`,
+              shortLabel,
+              ...definition.label.toLowerCase().split(/[^a-z0-9]+/u),
+            ].filter(Boolean);
+          }),
+        ),
+        "review",
+        "merge",
+        "branch",
+      ],
       title: "Open pull requests",
       icon: <PullRequestGlyph.pullRequest className={ITEM_ICON_CLASS} />,
       run: async () => {
@@ -1586,8 +1625,9 @@ function OpenCommandPaletteDialog(props: {
   }
 
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
-  const settingsSearchItems: CommandPaletteActionItem[] = searchSettings(
-    deferredQuery,
+  // Every setting goes to the palette's own matcher, so settings get the same
+  // word starts and typo tolerance as threads.
+  const settingsSearchItems: CommandPaletteActionItem[] = settingsForThisPlatform(
     availableSettingsSearchItems,
   ).map((item) => ({
     kind: "action",
@@ -1622,6 +1662,8 @@ function OpenCommandPaletteDialog(props: {
           ? changeAppearanceItem.groups
           : (currentView?.groups ?? rootGroups);
 
+  const isLinkedThreadSearch =
+    linkedThreadSearch?.linkedThreads !== undefined && deferredQuery === linkedThreadSearch.query;
   const filteredGroups = filterCommandPaletteGroups({
     activeGroups,
     query: deferredQuery,
@@ -1629,7 +1671,7 @@ function OpenCommandPaletteDialog(props: {
     projectSearchItems: projectSearchItems,
     settingsSearchItems,
     threadSearchItems:
-      linkedThreadSearch?.linkedThreads && deferredQuery === linkedThreadSearch.query
+      isLinkedThreadSearch && linkedThreadSearch?.linkedThreads
         ? buildLinkedThreadActionItems({
             ...linkedThreadSearch.linkedThreads,
             query: linkedThreadSearch.query,
@@ -1642,6 +1684,8 @@ function OpenCommandPaletteDialog(props: {
             },
           })
         : allThreadItems,
+    threadMessageItems: isLinkedThreadSearch ? [] : threadMessageItems,
+    now: searchNow,
   });
 
   const handleAddProjectForEnvironment = async (input: {
@@ -2629,6 +2673,10 @@ function OpenCommandPaletteDialog(props: {
     >
       {`Open in ${fileManagerName}`}
     </CommandFooterAction>
+  ) : isThreadSearchPending && !isLinkedThreadSearch && !isBrowsing ? (
+    // In the footer, so the list keeps its height while message results may
+    // still arrive below it.
+    <span className="text-muted-foreground text-xs">Searching messages…</span>
   ) : null;
 
   return (
