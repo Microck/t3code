@@ -2591,6 +2591,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
               const fiber = yield* Effect.gen(function* () {
                 // ACP v1 has no idle signal or steer/follow-up RPC. Only this explicit
                 // rejection guarantees the prompt was not accepted and is safe to queue.
+                // OMP reports this rejection as -32003; other ACP agents use -32603.
                 const delays = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
                 for (let attempt = 0; ; attempt++) {
                   if (queueState.phase === "cancelling") {
@@ -2607,7 +2608,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
                   const error = result.failure;
                   if (
                     error._tag !== "AcpRequestError" ||
-                    error.code !== -32603 ||
+                    (error.code !== -32603 && error.code !== -32003) ||
                     error.errorMessage !==
                       "Agent is already processing. Use steer() or followUp() to queue messages, or wait for completion."
                   ) {

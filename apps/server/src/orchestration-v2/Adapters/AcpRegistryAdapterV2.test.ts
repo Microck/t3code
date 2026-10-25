@@ -602,80 +602,84 @@ const nextBusyRetry = (session: Effect.Success<ReturnType<typeof openBusyReplayS
   );
 
 describe("AcpRegistryAdapterV2", () => {
-  it.effect("queues a user prompt rejected as busy after the preceding turn completes", () =>
-    Effect.gen(function* () {
-      const session = yield* openBusyReplaySession();
-      yield* startBusyReplayTurn(session);
-      const queued = yield* session.until(
-        (event) =>
-          event.type === "turn_item.updated" &&
-          event.turnItem.type === "error" &&
-          event.turnItem.retry !== undefined,
-      );
-      const retryItem = queued.at(-1)!;
-      assert.equal(retryItem.type, "turn_item.updated");
-      if (retryItem.type !== "turn_item.updated" || retryItem.turnItem.type !== "error")
-        throw new Error("Missing queue state");
-      assert.equal(retryItem.turnItem.status, "running");
-      assert.include(retryItem.turnItem.failure?.message ?? "", "queued");
-      assert.deepEqual(retryItem.turnItem.retry, {
-        attempt: 1,
-        maxAttempts: null,
-        retryDelayMs: 1_000,
-      });
-      assert.isFalse(queued.some((event) => event.type === "turn.terminal"));
-      yield* TestClock.adjust("1 second");
-      const events = yield* session.until((event) => event.type === "turn.terminal");
-      assert.isTrue(
-        events.some(
+  it.effect.each([-32603, -32003])(
+    "queues a busy prompt with code %s after the preceding turn completes",
+    (errorCode) =>
+      Effect.gen(function* () {
+        const session = yield* openBusyReplaySession({ errorCode });
+        yield* startBusyReplayTurn(session);
+        const queued = yield* session.until(
           (event) =>
             event.type === "turn_item.updated" &&
             event.turnItem.type === "error" &&
-            event.turnItem.retry !== undefined &&
-            event.turnItem.status === "completed",
-        ),
-      );
-      const second = events.at(-1)!;
-      assert.equal(second.type, "turn.terminal");
-      if (second.type !== "turn.terminal") throw new Error("Missing terminal");
-      assert.equal(second.status, "completed");
-      assert.isNull(second.failure);
-      assert.equal(second.runOrdinal, 2);
-      assert.equal(second.threadDisposition, "reusable");
-      assert.equal(session.promptRequests.length, 3);
-      assert.deepEqual(session.promptRequests[1], session.promptRequests[2]);
-      assert.isTrue(
-        events.some(
-          (event) =>
-            event.type === "message.updated" &&
-            event.message.text === "Received your confirmation.",
-        ),
-        "the queued prompt must reach the agent and publish its reply",
-      );
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
+            event.turnItem.retry !== undefined,
+        );
+        const retryItem = queued.at(-1)!;
+        assert.equal(retryItem.type, "turn_item.updated");
+        if (retryItem.type !== "turn_item.updated" || retryItem.turnItem.type !== "error")
+          throw new Error("Missing queue state");
+        assert.equal(retryItem.turnItem.status, "running");
+        assert.include(retryItem.turnItem.failure?.message ?? "", "queued");
+        assert.deepEqual(retryItem.turnItem.retry, {
+          attempt: 1,
+          maxAttempts: null,
+          retryDelayMs: 1_000,
+        });
+        assert.isFalse(queued.some((event) => event.type === "turn.terminal"));
+        yield* TestClock.adjust("1 second");
+        const events = yield* session.until((event) => event.type === "turn.terminal");
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "error" &&
+              event.turnItem.retry !== undefined &&
+              event.turnItem.status === "completed",
+          ),
+        );
+        const second = events.at(-1)!;
+        assert.equal(second.type, "turn.terminal");
+        if (second.type !== "turn.terminal") throw new Error("Missing terminal");
+        assert.equal(second.status, "completed");
+        assert.isNull(second.failure);
+        assert.equal(second.runOrdinal, 2);
+        assert.equal(second.threadDisposition, "reusable");
+        assert.equal(session.promptRequests.length, 3);
+        assert.deepEqual(session.promptRequests[1], session.promptRequests[2]);
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "message.updated" &&
+              event.message.text === "Received your confirmation.",
+          ),
+          "the queued prompt must reach the agent and publish its reply",
+        );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect("stops a queued busy prompt without resubmitting it", () =>
-    Effect.gen(function* () {
-      const session = yield* openBusyReplaySession({ cancel: true });
-      yield* startBusyReplayTurn(session);
-      const queued = yield* nextBusyRetry(session);
-      const started = queued.find((event) => event.type === "provider_turn.updated");
-      if (started?.type !== "provider_turn.updated") throw new Error("Missing provider turn");
-      const interrupt = yield* session.runtime
-        .interruptTurn({
-          providerThread: session.providerThread,
-          providerTurnId: started.providerTurn.id,
-        })
-        .pipe(Effect.forkScoped);
-      const terminal = yield* session.terminal;
-      yield* Fiber.join(interrupt);
-      assert.equal(terminal.status, "interrupted");
-      assert.isNull(terminal.failure);
-      // Advance past every backoff: a stopped prompt must never be dispatched again.
-      yield* TestClock.adjust("2 minutes");
-      assert.equal(session.promptRequests.length, 2);
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  it.effect.each([-32603, -32003])(
+    "stops a queued busy prompt with code %s without resubmitting it",
+    (errorCode) =>
+      Effect.gen(function* () {
+        const session = yield* openBusyReplaySession({ cancel: true, errorCode });
+        yield* startBusyReplayTurn(session);
+        const queued = yield* nextBusyRetry(session);
+        const started = queued.find((event) => event.type === "provider_turn.updated");
+        if (started?.type !== "provider_turn.updated") throw new Error("Missing provider turn");
+        const interrupt = yield* session.runtime
+          .interruptTurn({
+            providerThread: session.providerThread,
+            providerTurnId: started.providerTurn.id,
+          })
+          .pipe(Effect.forkScoped);
+        const terminal = yield* session.terminal;
+        yield* Fiber.join(interrupt);
+        assert.equal(terminal.status, "interrupted");
+        assert.isNull(terminal.failure);
+        // Advance past every backoff: a stopped prompt must never be dispatched again.
+        yield* TestClock.adjust("2 minutes");
+        assert.equal(session.promptRequests.length, 2);
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("keeps the prompt queued through multi-minute background work", () =>
@@ -772,6 +776,7 @@ describe("AcpRegistryAdapterV2", () => {
 
   it.effect.each([
     { name: "unrelated internal error", errorCode: -32603, errorMessage: "Another internal error" },
+    { name: "unrelated OMP server error", errorCode: -32003, errorMessage: "Another server error" },
     {
       name: "busy message with a different code",
       errorCode: -32602,
