@@ -60,6 +60,10 @@ const fixes: ReadonlyArray<{
     commit: "75d44d29be896062910d0c2d9fa3ba2dd3afa5af",
     label: "Discover every advertised ACP command and skill without a count cap",
   },
+  {
+    commit: "64d4a1b16e1067971c08118f5859a52148a35577",
+    label: "Queue OMP busy rejections until delivery or cancellation",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
