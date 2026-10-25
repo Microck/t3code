@@ -122,7 +122,8 @@ Conflicted files: ${JSON.stringify(conflicts)}.`;
   const untracked = git("ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean);
   if (untracked.some((file) => !allowedFiles.includes(file)))
     throw new Error("Conflict resolver created a file outside the fix.");
-  git("add", "-A", "--", ...allowedFiles);
+  // Stage the verified changes, including deletions, without naming files upstream already removed.
+  git("add", "-A");
   git("diff", "--cached", "--check");
   git("-c", "core.editor=true", "cherry-pick", "--continue");
 }
