@@ -6,6 +6,8 @@ const reactTests = [
   "src/features/settings/SettingsServerControlsRouteScreen.test.tsx",
   "src/features/settings/components/BranchNamingSettings.test.tsx",
   "src/native/NativeHeaderToolbar.test.tsx",
+  "src/native/useRestingTopOffset.test.tsx",
+  "src/native/useRetryingImageSource.test.tsx",
   "src/state/use-selected-thread-git-actions.test.tsx",
 ];
 

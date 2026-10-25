@@ -1,3 +1,4 @@
+import { isCompactionCommandMessage } from "@t3tools/contracts";
 import type { ThreadFeedEntry } from "../../lib/threadActivity";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 
@@ -16,7 +17,12 @@ export function appendPendingThreadMessages(
     feed.flatMap((entry) => (entry.type === "message" ? [entry.message.id] : [])),
   );
   return [
-    ...presentedFeed,
+    ...presentedFeed.map((entry): PendingThreadFeedEntry => {
+      const pendingMessage = queuedMessages.find(
+        (message) => message.creation !== undefined && message.messageId === entry.id,
+      );
+      return pendingMessage ? { ...entry, pendingMessage, acknowledged: false } : entry;
+    }),
     ...queuedMessages
       .filter((message) => !deliveredIds.has(message.messageId))
       .map((pendingMessage): PendingThreadFeedEntry => ({
@@ -39,4 +45,12 @@ export function appendPendingThreadMessages(
         },
       })),
   ];
+}
+
+export function isCompactionCommandFeedEntry(entry: PendingThreadFeedEntry): boolean {
+  return (
+    entry.type === "message" &&
+    entry.pendingMessage === undefined &&
+    isCompactionCommandMessage(entry.message)
+  );
 }
