@@ -612,9 +612,7 @@ describe("OpenCodeAdapterV2", () => {
       ),
   );
 
-  // Event order from a live OpenCode 1.18.32 run of a `task` call with
-  // background=true: the task part completes at launch, the root session
-  // settles, and the child session stays busy until its own work ends.
+  // OpenCode 1.18.32 background tasks complete at launch; children stay busy after root settlement.
   it.effect("reports a background task child as pending work after the root turn settles", () =>
     Effect.gen(function* () {
       const nativeEvents = asyncEventStream();
@@ -834,6 +832,62 @@ describe("OpenCodeAdapterV2", () => {
       );
       assert.ok(emptyWebSearch?.type === "web_search");
       assert.equal(emptyWebSearch.results, undefined);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("drops cancelled OpenCode todos so a finished list completes", () =>
+    Effect.gen(function* () {
+      const nativeEvents = asyncEventStream();
+      const nativeSessionId = "native-opencode-todos";
+      const harness = yield* makeOpenCodeRuntimeHarness("todos", nativeSessionId, {
+        event: {
+          subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+            options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
+            return { stream: nativeEvents.stream };
+          },
+        },
+        mcp: { status: async () => ({ data: {} }) },
+        session: {
+          create: async () => ({
+            data: { id: nativeSessionId, time: { created: 1, updated: 1 } },
+          }),
+          promptAsync: async () => ({ data: true }),
+        },
+      });
+      yield* harness.startTurn();
+      const received = yield* harness.runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "plan.updated"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* Effect.promise(() =>
+        nativeEvents.push({
+          type: "todo.updated",
+          properties: {
+            sessionID: nativeSessionId,
+            todos: [
+              { content: "Write the fix", status: "completed", priority: "high" },
+              { content: "Try another approach", status: "cancelled", priority: "low" },
+              { content: "Add a test", status: "completed", priority: "medium" },
+            ],
+          },
+        }),
+      );
+      const plan = (yield* Fiber.join(received)).flatMap((event) =>
+        event.type === "plan.updated" ? [event.plan] : [],
+      )[0];
+      assert.ok(plan?.kind === "todo_list");
+      assert.deepEqual(
+        plan.steps.map((step) => ({ text: step.text, status: step.status })),
+        [
+          { text: "Write the fix", status: "completed" },
+          { text: "Add a test", status: "completed" },
+        ],
+      );
+      assert.equal(plan.status, "completed");
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
@@ -2118,8 +2172,6 @@ describe("OpenCodeAdapterV2", () => {
       });
       assert.notEqual(minted.id, placeholder.id);
       assert.equal(minted.nativeThreadRef?.nativeId, "ses_native_2");
-      // OpenCode names a session from its first prompt only when create
-      // leaves the title unset, so the adapter never sends one.
       for (const input of createInputs) {
         assert.notProperty(input, "title");
       }

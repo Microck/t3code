@@ -33,8 +33,7 @@ import { getThreadListV2OrderedSection } from "../threads/threadListV2";
 import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 
-/** Version skew: never send settle/unsettle to a server that predates them
-    (capability defaults false on decode for older servers). */
+/** Older servers default the settlement capability to false; never send them settle/unsettle. */
 function environmentSupportsSettlement(environmentId: EnvironmentThreadShell["environmentId"]) {
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
@@ -204,8 +203,7 @@ function useThreadActionExecutor(
   return executeAction;
 }
 
-// A plain function, not a hook: a `use*` function that calls no hooks is skipped by
-// the compiler, so the delete handler it returned was a new closure every render.
+// Hookless use* functions skip compilation, leaving their returned handlers unstable.
 function confirmThreadDeletion(
   executeAction: (action: ThreadListAction, thread: EnvironmentThreadShell) => Promise<boolean>,
   thread: EnvironmentThreadShell,
@@ -437,8 +435,6 @@ export function useThreadListActions(): {
       return false;
     }
     selectionHaptic();
-    // Same placement as web: a fresh pin takes the top of the arranged
-    // run. Servers that predate reordering get the bare pin (keyless).
     let orderKey: string | undefined;
     if (environmentSupportsPinReorder(thread.environmentId)) {
       const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
@@ -456,10 +452,15 @@ export function useThreadListActions(): {
     // Pinning clears snooze, so older Settled or Snoozed undos would fight this pin.
     ThreadUndo.invalidate("settle", scopedThreadKey(thread.environmentId, thread.id));
     ThreadUndo.invalidate("snooze", scopedThreadKey(thread.environmentId, thread.id));
-    const result = await pinMutation({
-      environmentId: thread.environmentId,
-      input: { threadId: thread.id, ...(orderKey !== undefined ? { orderKey } : {}) },
-    });
+    const result = await withThreadDismissal(
+      scopedThreadKey(thread.environmentId, thread.id),
+      () =>
+        pinMutation({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, ...(orderKey !== undefined ? { orderKey } : {}) },
+        }),
+      (result) => result._tag === "Success",
+    );
     if (result._tag === "Failure") {
       const error = Cause.squash(result.cause);
       Dialog.alert(
@@ -484,10 +485,15 @@ export function useThreadListActions(): {
     selectionHaptic();
     const plan = ThreadUndo.planThreadUndo("unpin", thread);
     const claim = ThreadUndo.begin("pin", scopedThreadKey(thread.environmentId, thread.id));
-    const result = await unpinMutation({
-      environmentId: thread.environmentId,
-      input: { threadId: thread.id },
-    });
+    const result = await withThreadDismissal(
+      scopedThreadKey(thread.environmentId, thread.id),
+      () =>
+        unpinMutation({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id },
+        }),
+      (result) => result._tag === "Success",
+    );
     if (result._tag === "Failure") {
       claim.finish();
       const error = Cause.squash(result.cause);
