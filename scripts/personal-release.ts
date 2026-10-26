@@ -261,7 +261,7 @@ function prepare() {
       throw new Error(
         "Carried fixes cannot edit workflows; update personal-updates automation instead.",
       );
-    const picked = NodeChildProcess.spawnSync("git", ["cherry-pick", fix.commit], {
+    const picked = NodeChildProcess.spawnSync("git", ["cherry-pick", "--empty=drop", fix.commit], {
       stdio: "inherit",
     });
     if (picked.status !== 0) resolveConflict(fix.commit, allowedFiles);
