@@ -68,6 +68,10 @@ const fixes: ReadonlyArray<{
     commit: "1fc05be4da70e972b6573609364cc72a64669069",
     label: "Keep cancellable OMP busy retries compatible with Effect diagnostics",
   },
+  {
+    commit: "61b4b42706d2e8c647f69bc3f6dc8246e8aa7d8c",
+    label: "Reuse upstream's Result import for the OMP busy queue",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
