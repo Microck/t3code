@@ -1,8 +1,9 @@
+import { ActiveNewTaskContext } from "../../state/active-new-task";
 import * as Dialog from "../../components/ui/Dialog";
 import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { environmentSession } from "../../state/session";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   EnvironmentId,
@@ -23,7 +24,6 @@ import {
   T3_PROJECT_FILE_NAME,
   ThreadId,
 } from "@t3tools/contracts";
-import { sanitizeNewRefName } from "@t3tools/shared/git";
 import { threadContextsOutsideEnvironment } from "@t3tools/shared/composerContextReferences";
 import { resolveNewThreadEnvMode, resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
@@ -79,7 +79,7 @@ import {
   rememberModelOptions,
   withRememberedModelOptions,
 } from "../../state/use-model-option-memory";
-import { useBranches, useDebouncedValue, usePaginatedBranches } from "../../state/queries";
+import { useBranches, usePaginatedBranches } from "../../state/queries";
 import { vcsEnvironment } from "../../state/vcs";
 import {
   flattenQueuedThreadMessages,
@@ -116,26 +116,21 @@ import {
 } from "../../state/legacy-plan-mode";
 import { useLegacyPlanModeState } from "./use-legacy-plan-mode-enabled";
 import {
-  filterNewTaskBranches,
   resolveNewTaskBranchWorktreePath,
   resolveNewTaskLocalWorkspaceSelection,
   resolveNewTaskWorkspaceSelection,
 } from "./new-task-context-presentation";
 import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
+import { useOlderSettledCount } from "../../state/olderSettledShelf";
 
 type WorkspaceMode = "local" | "worktree";
-
-const BRANCH_SEARCH_DEBOUNCE_MS = 150;
 
 function pendingTaskDraftKey(messageId: string): string {
   return `pending-task:${messageId}`;
 }
 
-// The message id owned by the currently active editing session, tracked
-// across provider instances. An in-flight flush from a dismissed session
-// consults it so it never drops the draft or releases the drain lock out from
-// under a newer session editing the same task.
+// Track ownership across providers so old unmount flushes cannot drop newer drafts or drain locks.
 let activeEditingMessageId: string | null = null;
 
 function findQueuedPendingTask(messageId: string): QueuedThreadMessage | null {
@@ -165,6 +160,7 @@ export function branchBadgeLabel(input: {
 }
 
 type NewTaskFlowContextValue = {
+  readonly activeNewTask: { readonly pendingKey: string | null } | null;
   readonly projectScopes: ReadonlyArray<HomeProjectScope>;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
@@ -182,11 +178,7 @@ type NewTaskFlowContextValue = {
   readonly prompt: string;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly submitting: boolean;
-  readonly branchQuery: string;
   readonly branchesLoading: boolean;
-  readonly branchesError: string | null;
-  readonly branchesFetchingNextPage: boolean;
-  readonly hasMoreBranches: boolean;
   readonly availableBranches: ReadonlyArray<VcsRef>;
   readonly currentCheckoutBranchName: string | null;
   readonly runtimeMode: RuntimeMode;
@@ -204,14 +196,9 @@ type NewTaskFlowContextValue = {
   readonly selectedModelOption: ModelOption | null;
   readonly selectedProviderStatus: ServerProvider | null;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
-  readonly filteredBranches: ReadonlyArray<VcsRef>;
   readonly reset: () => void;
   readonly setProject: (project: EnvironmentProject) => void;
-  /**
-   * Binds the composer to an existing new-task draft (a row in the thread
-   * list). Returns false when the draft is gone, so the caller can fall back
-   * to a fresh one.
-   */
+  /** Returns false if the existing draft is gone, allowing fallback to a fresh draft. */
   readonly openDraft: (draftKey: string) => boolean;
   readonly selectEnvironment: (environmentId: EnvironmentId) => void;
   readonly switchEnvironment: (environmentId: EnvironmentId) => Promise<boolean>;
@@ -242,9 +229,7 @@ type NewTaskFlowContextValue = {
   readonly removeAttachment: (imageId: string) => void;
   readonly clearAttachments: () => void;
   readonly setSubmitting: (value: boolean) => void;
-  readonly setBranchQuery: (value: string) => void;
   readonly loadBranches: () => void;
-  readonly loadMoreBranches: () => void;
   readonly setRuntimeMode: (value: RuntimeMode) => void;
   readonly setInteractionMode: (value: ProviderInteractionMode) => void;
   readonly setSelectedModelOptions: (
@@ -255,7 +240,13 @@ type NewTaskFlowContextValue = {
 
 const NewTaskFlowContext = React.createContext<NewTaskFlowContextValue | null>(null);
 
-export function NewTaskFlowProvider(props: React.PropsWithChildren) {
+export function NewTaskFlowProvider(
+  props: React.PropsWithChildren<{
+    active?: boolean;
+    routeDraftId?: string;
+    routePendingTaskId?: string;
+  }>,
+) {
   const projects = useProjects();
   const threads = useThreadShells();
   const { savedConnectionsById } = useSavedRemoteConnections();
@@ -285,21 +276,18 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const [activeDraftKey, setActiveDraftKey] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [branchQuery, setBranchQuery] = useState("");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [editingPendingTask, setEditingPendingTask] = useState<QueuedThreadMessage | null>(null);
   const pendingLocalBranchSyncDraftKeysRef = useRef(new Set<string>());
-  // Mirrors `editingPendingTask` synchronously so the unmount flush cannot act
-  // on a task whose editing session already ended this render.
+  // Mirror edit state synchronously so unmount flush cannot save a session ended this render.
   const editingPendingTaskRef = useRef<QueuedThreadMessage | null>(null);
   const editingRevisionRef = useRef(Promise.resolve(0));
 
-  const reset = () => {
+  const reset = useCallback(() => {
     setSelectedEnvironmentId(null);
     setSelectedProjectKey(null);
     setActiveDraftKey(null);
     setSubmitting(false);
-    setBranchQuery("");
     setExpandedProvider(null);
     pendingLocalBranchSyncDraftKeysRef.current.clear();
     const editing = editingPendingTaskRef.current;
@@ -311,7 +299,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       }
       releaseEditingQueuedMessage(editing.messageId);
     }
-  };
+  }, []);
 
   const projectsForEnvironment = pipe(
     projects,
@@ -340,9 +328,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     projectsForEnvironment.find(
       (project) => scopedProjectKey(project.environmentId, project.id) === selectedProjectKey,
     ) ??
-    // While editing a queued task whose project shell is absent, keep the task
-    // pinned to its own project — falling through to an arbitrary first
-    // project would silently retarget it (and its reused turn identifiers).
+    // Pin queued edits to their original project when its shell is missing; fallback would silently retarget them.
     (editingPendingProject !== null &&
     selectedProjectKey ===
       scopedProjectKey(editingPendingProject.environmentId, editingPendingProject.id)
@@ -368,8 +354,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const selectedRepositoryKey = selectedProject?.repositoryIdentity
     ? repositoryGroupingKeyOf(selectedProject.repositoryIdentity)
     : null;
-  // `|| null` (not `??`): a pending-task placeholder project can have an empty
-  // workspaceRoot, and an "" basename would reject every real host below.
+  // Use || null: placeholder workspaceRoot can be empty, and an empty basename rejects real hosts.
   const selectedWorkspaceBasename = selectedProject?.workspaceRoot.split("/").at(-1) || null;
   const selectedProjectTitle = selectedProject?.title ?? null;
   const environments = (() => {
@@ -425,16 +410,38 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       ? activeDraftKey
       : null;
   useEffect(() => {
-    if (activeDraftKey !== null || editingPendingTask !== null || selectedProject === null) {
+    if (
+      props.active === false ||
+      activeDraftKey !== null ||
+      editingPendingTask !== null ||
+      selectedProject === null
+    ) {
       return;
     }
+    // oxlint-disable-next-line react/set-state-in-effect -- Creates the persistent draft once the project selection is ready; the key must exist before the composer mounts.
     setActiveDraftKey(
       createNewTaskDraft({
         environmentId: selectedProject.environmentId,
         projectId: selectedProject.id,
       }),
     );
-  }, [activeDraftKey, editingPendingTask, selectedProject]);
+  }, [activeDraftKey, editingPendingTask, selectedProject, props.active]);
+  const activePendingKey =
+    props.active === false
+      ? null
+      : props.routePendingTaskId
+        ? `pending-task:${props.routePendingTaskId}`
+        : props.routeDraftId
+          ? `draft-task:${props.routeDraftId}`
+          : editingPendingTask
+            ? `pending-task:${editingPendingTask.messageId}`
+            : selectedProjectDraftKey
+              ? `draft-task:${selectedProjectDraftKey}`
+              : null;
+  const activeNewTask = React.useMemo(
+    () => (props.active === false ? null : { pendingKey: activePendingKey }),
+    [props.active, activePendingKey],
+  );
   const selectedProjectDraft = useComposerDraft(selectedProjectDraftKey);
   const prompt = selectedProjectDraft.text;
   const attachments = selectedProjectDraft.attachments;
@@ -493,13 +500,15 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     t3ProjectFile,
   );
   const canChooseWorkspace = !isScratchDraft;
+  const selectedProjectOlderSettledCount = useOlderSettledCount(selectedProject);
   const selectedProjectHasThreads =
     selectedProject !== null &&
-    threads.some(
-      (thread) =>
-        thread.environmentId === selectedProject.environmentId &&
-        thread.projectId === selectedProject.id,
-    );
+    (selectedProjectOlderSettledCount > 0 ||
+      threads.some(
+        (thread) =>
+          thread.environmentId === selectedProject.environmentId &&
+          thread.projectId === selectedProject.id,
+      ));
   const defaultWorkspaceMode: WorkspaceMode = canChooseWorkspace
     ? resolveNewThreadEnvMode({
         projectSettings,
@@ -508,10 +517,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         projectHasThreads: selectedProjectHasThreads,
       })
     : "local";
-  // While the file read is pending and nothing above it decided, the
-  // resolved default is provisional. Nothing may write it into the draft
-  // during that window (the auto-branch effect does), or the frozen interim
-  // value beats the t3.json default once it loads.
+  // Do not persist the provisional workspace default while t3.json is loading; it would override
+  // the file's eventual default.
   const defaultWorkspaceModeSettled =
     selectedProjectDraft.workspaceSelection?.mode !== undefined ||
     projectSettings.sources.defaultThreadEnvMode !== "environment" ||
@@ -665,27 +672,16 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     }
     replaceComposerDraftAttachments(selectedProjectDraftKey, []);
   };
-  const branchSearchQuery = sanitizeNewRefName(branchQuery);
-  const debouncedBranchQuery = useDebouncedValue(branchSearchQuery, BRANCH_SEARCH_DEBOUNCE_MS);
-  const branchTarget = {
+  const branchState = usePaginatedBranches({
     environmentId: selectedProject?.environmentId ?? null,
     cwd: selectedProject?.workspaceRoot || null,
-    query: debouncedBranchQuery,
-  };
-  const branchState = usePaginatedBranches(branchTarget);
-  const branchSearchIsDebouncing = branchSearchQuery !== debouncedBranchQuery;
-  const branchesLoading =
-    branchSearchIsDebouncing || (branchState.isPending && branchState.data === null);
-  const branchesFetchingNextPage = branchState.isFetchingNextPage;
-  const hasMoreBranches =
-    branchState.data?.nextCursor !== null && branchState.data?.nextCursor !== undefined;
+  });
+  const branchesLoading = branchState.isPending && branchState.data === null;
   const allBranchRefs = branchState.refs;
   const availableBranches = pipe(
     allBranchRefs,
     Arr.filter((branch) => !branch.isRemote),
   );
-
-  const filteredBranches = filterNewTaskBranches(allBranchRefs, branchQuery);
 
   const carryDraftContentTo = (project: EnvironmentProject) => {
     const target = { environmentId: project.environmentId, projectId: project.id };
@@ -708,9 +704,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     if (!isNewTaskDraftKey(draftKey) || !stamp) {
       return false;
     }
-    // The stamped project must be loaded: selectedProject falls back to
-    // the environment's first project otherwise, and the draft would be
-    // sent somewhere the user never chose.
+    // Require the stamped project to load; selectedProject otherwise falls back and retargets the draft.
     const projectLoaded = projects.some(
       (project) => project.environmentId === stamp.environmentId && project.id === stamp.projectId,
     );
@@ -867,7 +861,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   };
 
   const refreshBranches = branchState.refresh;
-  const loadMoreBranches = branchState.loadNext;
   const loadBranches = () => {
     if (!selectedProject) {
       return;
@@ -885,15 +878,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     ) {
       return;
     }
-    // The draft screen writes a thread's branch and worktree into the draft in
-    // the same commit this effect runs, so the rendered selection above can be
-    // stale. Re-read the draft before replacing it.
+    // Re-read before replacing: the draft screen can update workspace selection in this same commit.
     const live = getComposerDraftSnapshot(selectedProjectDraftKey).workspaceSelection;
     if (live && (live.mode !== "worktree" || live.branch !== null)) {
       return;
     }
-    // The default may only exist as origin/<default> (isRemote), which
-    // availableBranches filters out — search the unfiltered refs for it.
+    // Search unfiltered refs: the default may exist only as origin/<default>, excluded by availableBranches.
     const preferredBranch =
       allBranchRefs.find((branch) => branch.isDefault) ??
       availableBranches.find((branch) => branch.current) ??
@@ -1028,10 +1018,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         ...(mode === "worktree" && workspaceSelection?.pullRequestReference
           ? { pullRequestReference: workspaceSelection.pullRequestReference }
           : {}),
-        // An explicit picker choice wins. Otherwise only a task sending now
-        // records the current checkout: a queued local task drains days
-        // later against whatever is checked out then, so a queue-time
-        // guess would pin a stale label to a thread that ran somewhere else.
+        // Queued local tasks use drain-time checkout; snapshot branches only for immediate sends or explicit choices.
         branch: resolveProjectThreadCreationBranch({
           workspaceMode: mode,
           selectedBranch: workspaceSelection?.branch ?? null,
@@ -1060,10 +1047,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     setEditingPendingTask(null);
   };
 
-  // If the queued task disappears mid-edit (deleted from the list, or
-  // delivered), end the editing session immediately without saving — a later
-  // flush must not resurrect it, and the composer should fall back to the
-  // regular per-project draft.
+  // End editing without saving if the queued task disappears; a later flush must not resurrect it.
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   useEffect(() => {
     const editing = editingPendingTaskRef.current;
@@ -1099,16 +1083,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       });
 
       if (!message) {
-        // The edits are currently unsendable (e.g. the prompt was cleared).
-        // Keep both the draft and the drain lock: the stale queued payload
-        // must not auto-send content the user just removed, and reopening the
-        // task resumes from the saved draft.
+        // Keep unsendable edits and the drain lock so removed content cannot auto-send from a stale payload.
         return;
       }
 
-      // The write handoff lets a reopened editor follow this editor's pending
-      // save. Its CAS still rejects unrelated queue edits, deletes, and
-      // deliveries, so the flush cannot resurrect or overwrite them.
+      // Hand off pending saves to reopened editors; CAS still rejects unrelated edits, deletes and deliveries.
       void flushPendingTaskEditorWrite({
         message,
         baseline: editingRevisionRef.current,
@@ -1126,8 +1105,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           scheduleUnusedComposerAttachmentCleanup(editing.attachments);
         })
         .catch((error) => {
-          // Keep the drain lock and the draft: delivering the stale payload
-          // would silently drop the newer edits. Reopening the task retries.
+          // Keep the draft and drain lock on failure so stale payloads cannot discard edits; reopening retries.
           console.warn("[new-task] failed to save edited pending task", error);
         });
     };
@@ -1143,6 +1121,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   );
 
   const value = {
+    activeNewTask,
     projectScopes,
     selectedEnvironmentId,
     selectedProjectKey,
@@ -1160,11 +1139,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     prompt,
     attachments,
     submitting,
-    branchQuery,
     branchesLoading,
-    branchesError: branchState.error,
-    branchesFetchingNextPage,
-    hasMoreBranches,
     availableBranches,
     currentCheckoutBranchName,
     runtimeMode,
@@ -1179,7 +1154,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     selectedModelOption,
     selectedProviderStatus,
     providerGroups,
-    filteredBranches,
     reset,
     setProject,
     openDraft,
@@ -1200,16 +1174,18 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     removeAttachment,
     clearAttachments,
     setSubmitting,
-    setBranchQuery,
     loadBranches,
-    loadMoreBranches,
     setRuntimeMode,
     setInteractionMode,
     setSelectedModelOptions,
     setExpandedProvider,
   } satisfies NewTaskFlowContextValue;
 
-  return <NewTaskFlowContext.Provider value={value}>{props.children}</NewTaskFlowContext.Provider>;
+  return (
+    <ActiveNewTaskContext value={activeNewTask}>
+      <NewTaskFlowContext.Provider value={value}>{props.children}</NewTaskFlowContext.Provider>
+    </ActiveNewTaskContext>
+  );
 }
 
 export function useNewTaskFlow() {

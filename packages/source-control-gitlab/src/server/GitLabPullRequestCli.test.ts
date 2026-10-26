@@ -146,6 +146,34 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("asks GitLab for the labels, author and draft state it can filter on", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(mergeRequests(1, 1))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.listMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        filters: {
+          labels: [["bug"], ["size:S", "size:XS"], ["a,b"], ["None"]],
+          excludedLabels: ["wontfix", "stale", "any"],
+          author: "@me",
+          draft: "only",
+        },
+      });
+
+      const params = new URLSearchParams((argsOfCall(0)[1] ?? "").split("?")[1]);
+      expect(params.get("labels")).toBe("bug");
+      expect(params.get("not[labels]")).toBe("wontfix,stale");
+      expect(params.get("author_username")).toBe("bilal");
+      expect(params.get("wip")).toBe("yes");
+    }),
+  );
+
   it.effect("carries on from the number of rows already delivered", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(mergeRequests(3, 1))));
@@ -161,8 +189,6 @@ layer("GitLabPullRequestCli.layer", (it) => {
         cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 10 },
       });
 
-      // GitLab's timestamp filter has no tie-breaker, so an offset is what advances through a
-      // boundary shared by more rows than one page can hold.
       const path = argsOfCall(0)[1] ?? "";
       expect(path).not.toContain("updated_before=");
       expect(path).toContain("order_by=updated_at");
@@ -430,8 +456,37 @@ layer("GitLabPullRequestCli.layer", (it) => {
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
       assert.isNotNull(diff.nextCursor);
       assert.isFalse(diff.truncated);
-      expect(argsOfCall(0)[1]).toContain("merge_requests/7/diffs?per_page=100&page=1");
+      expect(argsOfCall(0)[1]).toContain("merge_requests/7/diffs?per_page=30&page=1");
     }),
+  );
+
+  it.effect(
+    "pages a merge request diff 30 files at a time, which GitLab 15.7 to 17.10 accept",
+    () =>
+      Effect.gen(function* () {
+        mockedExecute
+          .mockReturnValueOnce(Effect.succeed(output(diffPage(0, 30))))
+          .mockReturnValueOnce(Effect.succeed(output(diffPage(30, 30))))
+          .mockReturnValueOnce(Effect.succeed(output(diffPage(60, 5))));
+        const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+        const target = { cwd: "/w", repository: "acme/web", number: 7 };
+
+        let patch = "";
+        let cursor: string | undefined;
+        do {
+          const slice = yield* cli.getMergeRequestDiff({ ...target, cursor });
+          patch += slice.patch;
+          cursor = slice.nextCursor ?? undefined;
+        } while (cursor !== undefined);
+
+        expect(mockedExecute.mock.calls.map(([call]) => call.args[1])).toEqual([
+          "projects/acme%2Fweb/merge_requests/7/diffs?per_page=30&page=1",
+          "projects/acme%2Fweb/merge_requests/7/diffs?per_page=30&page=2",
+          "projects/acme%2Fweb/merge_requests/7/diffs?per_page=30&page=3",
+        ]);
+        assert.strictEqual(patch.match(/^diff --git /gm)?.length, 65);
+        expect(patch).toContain("diff --git a/src/64.ts b/src/64.ts");
+      }),
   );
 
   it.effect("refuses a cursor it never handed out rather than reading it into a query", () =>
@@ -827,8 +882,6 @@ layer("GitLabPullRequestCli.layer", (it) => {
           head_sha: "head",
           start_sha: "start",
           position_type: "text",
-          // A renamed file is the only case the two differ, and GitLab cannot place a
-          // position that names the same path on both sides of the rename.
           old_path: "src/a.ts",
           new_path: "src/b.ts",
           old_line: 4,
@@ -949,8 +1002,6 @@ layer("GitLabPullRequestCli.layer", (it) => {
         requested: true,
       });
 
-      // GitLab replaces the whole set, so the reviewer already on the merge request has to be
-      // sent back with the new one or the request would take them off it.
       expect(argsOfCall(1)).toContain("PUT");
       expect(JSON.parse(callAt(1).stdin ?? "")).toEqual({ reviewer_ids: [5, 9] });
     }),

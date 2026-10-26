@@ -26,6 +26,7 @@ import {
   composerStateAtPromptEnd,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
+  extendReplacementRangeForTrailingSpace,
   formatAssistantCitationForComposer,
   isCollapsedCursorAdjacentToInlineToken,
   isPathSuggestionCurrent,
@@ -362,6 +363,18 @@ describe("detectComposerTrigger", () => {
     expect(trigger).toBeNull();
   });
 
+  it.each([
+    "It costs $5",
+    "budget $9.99",
+    "only $.99",
+    "about €20",
+    "raise $10k",
+    "raise $10k.",
+    "is it $5?",
+  ])("does not detect a skill trigger for the amount in %j", (text) => {
+    expect(detectComposerTrigger(text, text.length)).toBeNull();
+  });
+
   it("detects a pull request number at a token boundary", () => {
     const text = "Compare this with #8737";
 
@@ -646,5 +659,14 @@ describe("literal editor answer cursor state", () => {
       });
     }
     expect(composerStateAtPromptEnd("Use $my").trigger?.kind).toBe("skill");
+  });
+});
+
+describe("extendReplacementRangeForTrailingSpace", () => {
+  it("swallows one existing space after the range when the replacement ends with one", () => {
+    expect(extendReplacementRangeForTrailingSpace("@fi rest", 3, "@file ")).toBe(4);
+    expect(extendReplacementRangeForTrailingSpace("@firest", 3, "@file ")).toBe(3);
+    expect(extendReplacementRangeForTrailingSpace("@fi rest", 3, "@file")).toBe(3);
+    expect(extendReplacementRangeForTrailingSpace("@fi", 3, "@file ")).toBe(3);
   });
 });
