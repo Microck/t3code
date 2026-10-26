@@ -2626,8 +2626,8 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
                       retryDelayMs,
                     }) ?? Effect.void
                   );
-                  yield* Effect.sleep(retryDelayMs).pipe(
-                    Effect.raceFirst(Deferred.await(queueCancelled)),
+                  yield* Deferred.await(queueCancelled).pipe(
+                    Effect.timeoutOrElse({ duration: retryDelayMs, orElse: () => Effect.void }),
                   );
                 }
               }).pipe(Effect.forkIn(runtimeScope));
