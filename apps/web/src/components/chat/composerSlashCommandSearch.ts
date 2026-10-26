@@ -12,10 +12,7 @@ type SlashSearchItem = Extract<
   { type: "slash-command" | "provider-slash-command" | "skill" }
 >;
 
-/**
- * Ordinary provider commands must open the message. Advertised `skill:`
- * commands can also be embedded in a prompt, like native skill mentions.
- */
+/** Advertised skills can be embedded in prompts; ordinary commands must open the message. */
 export function slashCommandItemsForPromptPosition(
   items: ReadonlyArray<SlashSearchItem>,
   isAtPromptStart: boolean,
