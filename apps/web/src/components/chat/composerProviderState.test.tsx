@@ -11,6 +11,7 @@ import {
   getComposerReasoningStep,
   withImplicitFastModeDefault,
 } from "./composerProviderState";
+import { readPromptUltrathink } from "./TraitsPicker";
 
 const PROVIDER: ProviderDriverKind = ProviderDriverKind.make("codex");
 const MODEL = "test-model";
@@ -238,6 +239,15 @@ describe("withImplicitFastModeDefault", () => {
   });
 });
 
+describe("readPromptUltrathink", () => {
+  it("tells the Ultrathink prefix apart from the word in the body", () => {
+    expect(readPromptUltrathink("Fix the bug")).toBe("none");
+    expect(readPromptUltrathink("Ultrathink: Fix the bug")).toBe("prefix");
+    expect(readPromptUltrathink("ultrathink about the bug")).toBe("body");
+    expect(readPromptUltrathink("Ultrathink: ultrathink harder")).toBe("body");
+  });
+});
+
 describe("getComposerReasoningStep", () => {
   const LEVELS = [
     { id: "low", label: "Low" },
@@ -314,7 +324,6 @@ describe("getComposerReasoningStep", () => {
         expected: { prompt: "Ultrathink:\nFix the bug", cursor: 20 },
       },
       {
-        // The prefix, not the draft's Medium, is the current level.
         prompt: "Ultrathink:\n  Fix the bug",
         modelOptions: selections(["effort", "medium"]),
         direction: -1,
@@ -335,7 +344,6 @@ describe("getComposerReasoningStep", () => {
       expect(result).toStrictEqual(expected);
       expect(result?.prompt.slice(result.cursor)).toMatch(/^bug/);
     }
-    // A caret in leading whitespace must not land inside the new prefix.
     expect(
       step({ ...CLAUDE, prompt: "   Fix", modelOptions: selections(["effort", "high"]) })?.cursor,
     ).toBe("Ultrathink:\n".length);
