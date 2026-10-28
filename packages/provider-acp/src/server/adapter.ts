@@ -5883,13 +5883,18 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 notification.update.sessionUpdate === "config_option_update" ||
                 notification.update.sessionUpdate === "current_mode_update"
               ) {
-                yield* (
-                  flavor.onSessionConfigurationUpdate?.(
-                    yield* runtime.getConfigOptions,
-                    yield* runtime.getModeState,
-                    (yield* Ref.get(activeSessionSetup))?.sessionSetupResult.models,
-                  ) ?? Effect.void
-                );
+                const setup = yield* Ref.get(activeSessionSetup);
+                // Raw notifications also arrive during startup and from child sessions.
+                // Until the root is adopted, its runtime configuration is not a catalog.
+                if (setup !== null && notification.sessionId === setup.sessionId) {
+                  yield* (
+                    flavor.onSessionConfigurationUpdate?.(
+                      yield* runtime.getConfigOptions,
+                      yield* runtime.getModeState,
+                      setup.sessionSetupResult.models,
+                    ) ?? Effect.void
+                  );
+                }
               }
               yield* handleSessionUpdate(
                 flavor.normalizeSessionUpdate?.(notification) ?? notification,
