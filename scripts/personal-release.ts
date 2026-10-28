@@ -11,67 +11,72 @@ const fixes: ReadonlyArray<{
   readonly label?: string;
 }> = [
   // This rebased copy preserves upstream's deletion of the obsolete web test.
-  { pr: 22466, commit: "fd47810fb03908bf7af6b2c62fe6c036c75b820b" },
-  { pr: 22842, commit: "7023133093f93a329532e8021bf9c7e43106d56d" },
+  { pr: 22466, commit: "31eedc68ec4b19eda53ee6727dcef612b6e9de13" },
+  { pr: 22842, commit: "095e6983e35b83571c77dd5397dd738183b8b212" },
   // Includes the activation-preference prerequisite needed for one resume after Stop.
-  { pr: 21439, commit: "c0057c6c51f2f24b39bd9c8ca7ce1800213df54f" },
-  { pr: 21323, commit: "0791507a577396732fbc2d07933c736e1da629d9" },
-  { pr: 22698, commit: "fca90d2e0d3b25f9ef74591a48cd73f119ba0a6d" },
-  { pr: 20363, commit: "3309cdfaa9f42a87eaf47e6f08fa075f3155201c" },
-  { pr: 21066, commit: "df744d509e241c09c31297f035cad170b3152ba0" },
-  { pr: 21770, commit: "616964bdd5ce2cea5a0d47c56c10db419c1b0b52" },
-  { pr: 21801, commit: "e348de82fdca7720c85a5899e9f66832e409a0e4" },
-  { pr: 22972, commit: "119c0da542105389858f50a665d44cd4fa42ed71" },
-  { pr: 26403, commit: "ea1c1e8bee48869240408af4dcafdde90c96c800" },
+  { pr: 21439, commit: "990fda529b7bed26d37826f031cb2682fc0e6394" },
+  { pr: 21323, commit: "60250740480898e75cb5cd75630fe38faedd2f4d" },
+  { pr: 22698, commit: "4a94f79b205d724d29e75dcebf571180c94bf36e" },
+  { pr: 20363, commit: "a6a2b2ae7a4c433d1cba3aaba48ab6a0a70bc296" },
+  { pr: 21066, commit: "3dc6f65b586484d14b9eb94aef6b8eb60e5bef03" },
+  { pr: 21770, commit: "669a88a2f2f15692ec2fdb9a70b0f12b23991d86" },
+  { pr: 21801, commit: "ca386e5e4eb161c0e2fe56d9b4a2a8064b634ba5" },
+  { pr: 22972, commit: "35db61ab56c026cecc72dd07f7eafc7a2ffa09c5" },
+  { pr: 26403, commit: "0a0f9e069605a862fb4db486e7a81a916b1b3691" },
   {
-    commit: "a0c2bab73bfd075a57c59afc0f9472835d48e409",
+    commit: "dfe85271044c301f8403edfe436213b73d272f39",
     label: "OMP choices and custom answers in one question step",
   },
   {
-    commit: "ab1a5f30df2c5b9bc81d4735aa2cc9fcadf97372",
+    commit: "693dd6efd581f6088c0947ea7d103bdc3ae063f6",
     label: "Native OMP task progress on web, desktop and mobile",
   },
   {
-    commit: "4d0ef330fdaafe9141eee7d2446616c9831989b1",
+    commit: "ff8d673a4403b336c04b733f4677b0dc9992c39d",
     label: "OMP model family logos and reported completion estimates",
   },
   {
-    commit: "a8e71d07247c3bccd9de3309370193a162b2d0e7",
+    commit: "770abdbdc769a52c85d46c98526e63783b19063f",
     label: "Native OMP wait jobs displayed as subagent status rows",
   },
   {
-    commit: "6d8b72966b9496b783a56f7835195fda87bdb374",
+    commit: "71c9757234a907568e9c9189bcc337ce373e17b3",
     label: "Distribution-aware remote update checks",
   },
   {
-    commit: "0e07d97b6ecd762a5b37e588d60e42a6fea2e53d",
+    commit: "1fd0fb63740dcfd56db1ad4229d8bfcbf9e97a7e",
   },
   {
-    commit: "1d6efdce95a7f1245a25b09984ca0d1d2700caaa",
+    commit: "73c68a967f1882f12513b096d1a84753f6767197",
   },
   {
+    pr: 26188,
     commit: "87d2500ab936ef32dde6ec5dc2541d56d94559e5",
     label: "Recover shared Codex sessions after the app-server process exits",
   },
   {
-    commit: "ee24af6141a68d93318b31a57b737a0b85eb50b8",
+    commit: "6308c020d352238171e788312f8f3429ca3f37ab",
     label: "Package mirror failover on GitHub-hosted runners",
   },
   {
-    commit: "75d44d29be896062910d0c2d9fa3ba2dd3afa5af",
+    commit: "8cf8c2c77dd8824c06cc705d78a922b9fdacc35b",
     label: "Discover every advertised ACP command and skill without a count cap",
   },
   {
-    commit: "64d4a1b16e1067971c08118f5859a52148a35577",
+    commit: "7993d70a0d7ff72ce1bed191744947c2bb1298a8",
     label: "Queue OMP busy rejections until delivery or cancellation",
   },
   {
-    commit: "1fc05be4da70e972b6573609364cc72a64669069",
+    commit: "d9f5dafcb8e7c29d3841e2f817ae7cebbde6b99e",
     label: "Keep cancellable OMP busy retries compatible with Effect diagnostics",
   },
   {
-    commit: "61b4b42706d2e8c647f69bc3f6dc8246e8aa7d8c",
+    commit: "1542e6e6d9261b4574c9b07f887fb7b769f06c27",
     label: "Reuse upstream's Result import for the OMP busy queue",
+  },
+  {
+    commit: "981ea6c37cfd2856aab0984574b8759ca6dafc8d",
+    label: "Keep ACP startup metadata from erasing the model catalog",
   },
 ];
 
