@@ -7,9 +7,14 @@ hours and can also be dispatched manually.
 
 Each build starts from an official release, not upstream main. A fix is omitted
 only when that release contains its upstream merge commit. Personal features
-without an upstream PR remain in each build. Copilot resolves
-cherry-pick conflicts in the files changed by that fix. It cannot change release
-automation. Build and regression failures block publication. Failed runs create
+without an upstream PR remain in each build. A checked-in prepared patch can
+supply a reviewed resolution for one exact upstream commit and ordered fix list.
+The bootstrap verifies its complete resulting Git tree in a temporary index before
+changing the checkout, and refuses workflow edits. A changed nightly or fix list
+falls back to normal cherry-picking; a broken matching patch stops the run.
+
+Copilot resolves remaining cherry-pick conflicts in the files changed by that fix.
+It cannot change release automation. Build and regression failures block publication. Failed runs create
 or update a single issue on this fork; the installed version remains available.
 
 Set the Actions secret `COPILOT_GITHUB_TOKEN` to a fine-grained token with the

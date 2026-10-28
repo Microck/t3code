@@ -2,6 +2,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 const upstream = "pingdotgg/t3code";
 const fork = "Microck/t3code";
@@ -137,6 +139,56 @@ Conflicted files: ${JSON.stringify(conflicts)}.`;
   git("-c", "core.editor=true", "cherry-pick", "--continue");
 }
 
+/** A reviewed resolution is usable only for its exact upstream and ordered fix set. */
+export function applyPreparedFixes(input: {
+  readonly repoPath: string;
+  readonly upstreamCommit: string;
+  readonly expectedTree: string;
+  readonly commits: ReadonlyArray<string>;
+  readonly expectedCommits: ReadonlyArray<string>;
+  readonly patch: string;
+}): boolean {
+  const gitAt = (...args: string[]) =>
+    NodeChildProcess.execFileSync("git", args, {
+      cwd: input.repoPath,
+      encoding: "utf8",
+    }).trim();
+  if (
+    gitAt("rev-parse", "HEAD") !== input.upstreamCommit ||
+    JSON.stringify(input.commits) !== JSON.stringify(input.expectedCommits)
+  )
+    return false;
+  if (gitAt("status", "--porcelain") !== "")
+    throw new Error("Prepared fixes require a clean checkout.");
+  const temporary = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-prepared-index-"));
+  try {
+    const env = { ...process.env, GIT_INDEX_FILE: NodePath.join(temporary, "index") };
+    const staged = (...args: string[]) =>
+      NodeChildProcess.execFileSync("git", args, {
+        cwd: input.repoPath,
+        encoding: "utf8",
+        env,
+        input: args[0] === "apply" ? input.patch : undefined,
+      }).trim();
+    staged("read-tree", "HEAD");
+    staged("apply", "--cached", "--check", "-");
+    staged("apply", "--cached", "-");
+    const paths = staged("diff", "--cached", "--name-only", "-z").split("\0");
+    if (paths.some((file) => file.startsWith(".github/workflows/")))
+      throw new Error("Prepared fixes cannot change workflows.");
+    if (staged("write-tree") !== input.expectedTree)
+      throw new Error("Prepared fixes do not match the reviewed tree.");
+    NodeChildProcess.execFileSync("git", ["apply", "--index", "-"], {
+      cwd: input.repoPath,
+      input: input.patch,
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+    return true;
+  } finally {
+    NodeFS.rmSync(temporary, { recursive: true, force: true });
+  }
+}
+
 export function personalVersion(upstreamVersion: string, runNumber: number) {
   if (!/^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+$/.test(upstreamVersion))
     throw new Error("Expected an official nightly version.");
@@ -223,6 +275,14 @@ function prepare() {
   }
   const upstreamVersion = release.tag_name.slice(1);
   const automationCommit = git("rev-parse", "HEAD");
+  const prepared = JSON.parse(
+    NodeFS.readFileSync("scripts/personal-fixes/20261028.json", "utf8"),
+  ) as {
+    upstreamCommit: string;
+    expectedTree: string;
+    commits: string[];
+  };
+  const preparedPatch = NodeFS.readFileSync("scripts/personal-fixes/20261028.patch", "utf8");
   const returnScripts = ["ps1", "sh"].map((extension) => ({
     extension,
     source: NodeFS.readFileSync(`${import.meta.dirname}/personal-return.${extension}`, "utf8"),
@@ -236,7 +296,24 @@ function prepare() {
   git("fetch", "upstream", `refs/tags/${release.tag_name}`);
   git("switch", "-c", branch, "FETCH_HEAD");
   const applied = [];
-  for (const fix of fixes) {
+  const usedPrepared = applyPreparedFixes({
+    repoPath: process.cwd(),
+    upstreamCommit: prepared.upstreamCommit,
+    expectedTree: prepared.expectedTree,
+    commits: fixes.map((fix) => fix.commit),
+    expectedCommits: prepared.commits,
+    patch: preparedPatch,
+  });
+  if (usedPrepared) {
+    git("diff", "--cached", "--check");
+    git("commit", "-m", "fix: apply reviewed personal fixes for the pinned nightly");
+    for (const fix of fixes) {
+      if (fix.pr !== undefined) applied.push(`https://github.com/${upstream}/pull/${fix.pr}`);
+      else if (fix.label)
+        applied.push(`${fix.label}: https://github.com/${fork}/commit/${fix.commit}`);
+    }
+  }
+  for (const fix of usedPrepared ? [] : fixes) {
     const pr =
       fix.pr === undefined
         ? undefined

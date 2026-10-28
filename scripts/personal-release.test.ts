@@ -4,8 +4,13 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { describe, expect, it } from "@effect/vitest";
-import { createBuildSnapshot, officialNightly, personalVersion } from "./personal-release.ts";
+import { describe, expect, it } from "vite-plus/test";
+import {
+  applyPreparedFixes,
+  createBuildSnapshot,
+  officialNightly,
+  personalVersion,
+} from "./personal-release.ts";
 
 describe("personal release selection", () => {
   it("ignores drafts, stable releases and maintainer previews", () => {
@@ -105,5 +110,73 @@ it("publishes current application source without importing upstream workflow his
     expect(git("status", "--porcelain")).toBe("");
   } finally {
     NodeFS.rmSync(resolvedRoot, { recursive: true, force: true });
+  }
+});
+
+it("applies reviewed fixes only to their exact upstream and ordered fix set", () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-prepared-fixes-"));
+  const git = (...args: string[]) =>
+    NodeChildProcess.execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  try {
+    git("init", "--initial-branch=fixture");
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.invalid");
+    NodeFS.mkdirSync(NodePath.join(root, "hooks"));
+    git("config", "core.hooksPath", NodePath.join(root, "hooks"));
+    NodeFS.writeFileSync(NodePath.join(root, "code.ts"), "original\n");
+    git("add", "code.ts");
+    git("commit", "-m", "base");
+    const upstreamCommit = git("rev-parse", "HEAD");
+    const fixed = "reviewed fix\n".repeat(20_000);
+    NodeFS.writeFileSync(NodePath.join(root, "code.ts"), fixed);
+    git("add", "code.ts");
+    const expectedTree = git("write-tree");
+    const patch = git("diff", "--cached", "--binary") + "\n";
+    git("restore", "--staged", "--worktree", "code.ts");
+    const input = {
+      repoPath: root,
+      upstreamCommit,
+      expectedTree,
+      patch,
+      commits: ["fix-a", "fix-b"],
+      expectedCommits: ["fix-a", "fix-b"],
+    };
+    expect(applyPreparedFixes({ ...input, upstreamCommit: "different" })).toBe(false);
+    expect(applyPreparedFixes({ ...input, commits: ["fix-b", "fix-a"] })).toBe(false);
+    expect(() => applyPreparedFixes({ ...input, expectedTree: "wrong" })).toThrow("reviewed tree");
+    expect(git("status", "--porcelain")).toBe("");
+    expect(NodeFS.readFileSync(NodePath.join(root, "code.ts"), "utf8")).toBe("original\n");
+    expect(applyPreparedFixes(input)).toBe(true);
+    expect(git("write-tree")).toBe(expectedTree);
+    expect(NodeFS.readFileSync(NodePath.join(root, "code.ts"), "utf8")).toBe(fixed);
+    expect(() => applyPreparedFixes(input)).toThrow("clean checkout");
+    git("restore", "--staged", "--worktree", "code.ts");
+    NodeFS.mkdirSync(NodePath.join(root, ".github", "workflows"), { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(root, ".github", "workflows", "release.yml"),
+      "reviewed workflow\n",
+    );
+    git("add", ".github/workflows/release.yml");
+    git("commit", "-m", "workflow baseline");
+    const workflowBase = git("rev-parse", "HEAD");
+    NodeFS.writeFileSync(
+      NodePath.join(root, ".github", "workflows", "release.yml"),
+      "unreviewed workflow\n",
+    );
+    git("add", ".github/workflows/release.yml");
+    const workflowTree = git("write-tree");
+    const workflowPatch = git("diff", "--cached", "--binary") + "\n";
+    git("restore", "--staged", "--worktree", ".github/workflows/release.yml");
+    expect(() =>
+      applyPreparedFixes({
+        ...input,
+        upstreamCommit: workflowBase,
+        expectedTree: workflowTree,
+        patch: workflowPatch,
+      }),
+    ).toThrow("cannot change workflows");
+    expect(git("status", "--porcelain")).toBe("");
+  } finally {
+    NodeFS.rmSync(root, { recursive: true, force: true });
   }
 });
