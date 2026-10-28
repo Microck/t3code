@@ -102,6 +102,7 @@ jobs:
           vp test run apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts -t 'closes unfinished ACP tools|terminalizes an empty|direct Stop on a deferred|background work when interrupted|quarantine drops late|recovers from .* cancellation|preserves ACP agent tool labels|command description|elicitation'
           vp test run apps/server/src/orchestration-v2/Adapters/AcpRegistryAdapterV2.test.ts packages/effect-acp/src/protocol.test.ts
           vp test run packages/provider-acp-registry/src/server/omp-acp.test.ts packages/effect-acp/src/schema.test.ts
+          vp test run packages/provider-acp-registry/src/server/omp-maintenance.test.ts packages/provider-acp-registry/src/server/driver.test.ts apps/server/src/provider/providerMaintenanceRunner.test.ts
           vp test run packages/client-runtime/src/state/providerInstanceDisplay.test.ts apps/web/src/providerInstances.test.ts apps/mobile/src/lib/modelOptions.test.ts apps/mobile/src/features/threads/thread-provider-instance.test.ts
           vp test run apps/mobile/src/features/threads/use-composer-command-menu.test.ts
           vp test run packages/provider-acp/src/server/elicitation.test.ts apps/web/src/pendingUserInput.test.ts apps/mobile/src/lib/threadActivity.test.ts packages/contracts/src/orchestrationV2.test.ts

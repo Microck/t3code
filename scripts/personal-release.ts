@@ -78,6 +78,10 @@ const fixes: ReadonlyArray<{
     commit: "981ea6c37cfd2856aab0984574b8759ca6dafc8d",
     label: "Keep ACP startup metadata from erasing the model catalog",
   },
+  {
+    commit: "901ffa4af0e70d8d9cad08240973ee4253f13905",
+    label: "Check and install OMP provider updates through its native updater",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
