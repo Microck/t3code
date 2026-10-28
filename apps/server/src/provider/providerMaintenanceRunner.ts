@@ -93,6 +93,7 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
     readonly command: string;
     readonly args: ReadonlyArray<string>;
     readonly env?: NodeJS.ProcessEnv;
+    readonly cwd?: string;
     readonly onProgress?: (line: string) => Effect.Effect<void>;
   }) {
     const collectCommandResult = Effect.fn("ProviderMaintenanceRunner.collectCommandResult")(
@@ -103,6 +104,7 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
           .spawn(
             ChildProcess.make(resolved.command, resolved.args, {
               shell: resolved.shell,
+              ...(input.cwd ? { cwd: input.cwd } : {}),
               ...(input.env ? { env: input.env, extendEnv: true } : {}),
             }),
           )
@@ -306,6 +308,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       args: update.args,
       onProgress,
       ...(update.env ? { env: update.env } : {}),
+      ...(update.cwd ? { cwd: update.cwd } : {}),
     });
   const commandCoordinator = yield* makeProviderMaintenanceCommandCoordinator({
     makeAlreadyRunningError: () =>

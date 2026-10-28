@@ -24,4 +24,5 @@ export interface ProviderMaintenanceCommandAction {
   readonly lockKey: string;
   /** Native updaters must use the instance's custom home (e.g. `CODEX_HOME`). */
   readonly env?: NodeJS.ProcessEnv;
+  readonly cwd?: string;
 }
