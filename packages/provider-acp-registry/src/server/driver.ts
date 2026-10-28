@@ -478,11 +478,15 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     );
     if (Option.isSome(runtimeCoordinator)) {
       yield* runtimeCoordinator.value.clearAvailableCommands(instanceId);
-      yield* runtimeCoordinator.value.clearLiveConfiguration(instanceId);
+      yield* runtimeCoordinator.value.clearLiveConfiguration(instanceId, "driver-created");
       yield* Effect.addFinalizer(() =>
         runtimeCoordinator.value
           .clearAvailableCommands(instanceId)
-          .pipe(Effect.andThen(runtimeCoordinator.value.clearLiveConfiguration(instanceId))),
+          .pipe(
+            Effect.andThen(
+              runtimeCoordinator.value.clearLiveConfiguration(instanceId, "driver-disposed"),
+            ),
+          ),
       );
     }
     const crypto = yield* Crypto.Crypto;
@@ -758,7 +762,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
 
     const clearLiveState = Option.isSome(runtimeCoordinator)
       ? runtimeCoordinator.value
-          .clearLiveConfiguration(instanceId)
+          .clearLiveConfiguration(instanceId, "authentication-invalidated")
           .pipe(Effect.andThen(runtimeCoordinator.value.clearAvailableCommands(instanceId)))
       : Effect.void;
     const controller = yield* AcpRegistryAuth.makeAcpRegistryAuth({
@@ -877,7 +881,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                       ? Effect.all(
                           [
                             runtimeCoordinator.value.clearAvailableCommands(instanceId),
-                            runtimeCoordinator.value.clearLiveConfiguration(instanceId),
+                            runtimeCoordinator.value.clearLiveConfiguration(instanceId, "logout"),
                           ],
                           { concurrency: "unbounded", discard: true },
                         )

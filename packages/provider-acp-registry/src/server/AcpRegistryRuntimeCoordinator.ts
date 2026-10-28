@@ -66,7 +66,10 @@ export class AcpRegistryRuntimeCoordinator extends Context.Service<
       instanceId: ProviderInstanceId,
       onUpdate: (commands: AcpRegistryAvailableCommands) => Effect.Effect<void>,
     ) => Effect.Effect<void>;
-    readonly clearLiveConfiguration: (instanceId: ProviderInstanceId) => Effect.Effect<void>;
+    readonly clearLiveConfiguration: (
+      instanceId: ProviderInstanceId,
+      reason: string,
+    ) => Effect.Effect<void>;
     readonly publishLiveConfiguration: (
       instanceId: ProviderInstanceId,
       configuration: AcpRegistryLiveConfiguration,
@@ -207,18 +210,27 @@ const make = Effect.gen(function* () {
       );
 
   const clearLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["clearLiveConfiguration"] =
-    (instanceId) =>
+    (instanceId, reason) =>
       Ref.update(liveConfigurationByInstance, (current) => {
         const next = new Map(current);
         next.delete(instanceId);
         return next;
-      });
+      }).pipe(
+        Effect.tap(() => Effect.logInfo("ACP live configuration cleared", { instanceId, reason })),
+      );
 
   const publishLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["publishLiveConfiguration"] =
     (instanceId, configuration) =>
       Ref.update(liveConfigurationByInstance, (current) =>
         new Map(current).set(instanceId, configuration),
       ).pipe(
+        Effect.tap(() =>
+          Effect.logInfo("ACP live configuration published", {
+            instanceId,
+            modelCount: configuration.models.length,
+            optionCount: configuration.configOptions.length,
+          }),
+        ),
         Effect.andThen(
           PubSub.publish(liveConfigurationUpdates, {
             instanceId,

@@ -18,6 +18,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Fiber from "effect/Fiber";
 import * as DateTime from "effect/DateTime";
 import * as Queue from "effect/Queue";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -833,6 +834,110 @@ describe("AcpRegistryAdapterV2", () => {
   });
 
   describe("the agent's own pickers", () => {
+    it.effect(
+      "does not replace a discovered catalog with a failed session's startup metadata",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          const coordinator = yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
+          const replayDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-catalog-startup-",
+          });
+          const instanceId = ProviderInstanceId.make("catalog-startup");
+          const discovered: AcpRegistryLiveConfiguration = {
+            models: [{ id: "gpt-test", name: "GPT Test", description: null }],
+            currentModelId: "gpt-test",
+            configOptions: [],
+          };
+          yield* coordinator.publishLiveConfiguration(instanceId, discovered);
+          const transcript = yield* decodeAcpReplayTranscript(
+            {
+              provider: ACP_REGISTRY_PROVIDER,
+              protocol: "acp.ndjson-jsonrpc",
+              version: "1",
+              scenario: "catalog-startup",
+              entries: [
+                {
+                  type: "expect_outbound",
+                  frame: { kind: "request", method: "initialize", params: "<any>" },
+                },
+                {
+                  type: "emit_inbound",
+                  frame: {
+                    kind: "response",
+                    method: "initialize",
+                    result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },
+                  },
+                },
+                {
+                  type: "expect_outbound",
+                  frame: { kind: "request", method: "session/new", params: "<any>" },
+                },
+                {
+                  type: "emit_inbound",
+                  frame: {
+                    kind: "notification",
+                    method: "session/update",
+                    params: {
+                      sessionId: "starting-session",
+                      update: { sessionUpdate: "current_mode_update", currentModeId: "auto" },
+                    },
+                  },
+                },
+                {
+                  type: "emit_inbound",
+                  frame: {
+                    kind: "response",
+                    method: "session/new",
+                    error: { code: -32603, message: "Session startup failed" },
+                  },
+                },
+              ] as never,
+            },
+            ACP_REGISTRY_PROVIDER,
+          );
+          const adapter = yield* makeAcpRegistryAdapterV2({
+            selfInvocation: yield* resolveSelfInvocation(),
+            instanceId,
+            settings: yield* decodeAcpRegistryAdapterSettings({
+              source: "local",
+              commandPath: "omp",
+            }),
+            environment: {},
+            makeRuntime: makeAcpReplayRuntime({
+              transcript,
+              statusPath: path.join(replayDir, "status.json"),
+              scriptPath: yield* path.fromFileUrl(
+                new URL("../../../scripts/acp-replay-agent.ts", import.meta.url),
+              ),
+              childProcessSpawner,
+              fileSystem,
+            }),
+          });
+          yield* adapter
+            .openSession({
+              threadId: ThreadId.make("catalog-startup-thread"),
+              providerSessionId: ProviderSessionId.make("catalog-startup-session"),
+              modelSelection: { instanceId, model: "default" },
+              runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                cwd: replayDir,
+              }),
+            })
+            .pipe(Effect.flip);
+          assert.deepEqual(
+            Option.getOrUndefined(yield* coordinator.getLiveConfiguration(instanceId)),
+            discovered,
+          );
+        }).pipe(
+          Effect.provide(AcpRegistrySupport.layerFromHost.pipe(Layer.provideMerge(layerTest))),
+          Effect.scoped,
+        ),
+    );
+
     type Frame = Record<string, unknown>;
     const outbound = (method: string, params: unknown = "<any>"): Frame => ({
       type: "expect_outbound",
