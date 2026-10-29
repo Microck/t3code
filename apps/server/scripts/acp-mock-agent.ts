@@ -42,6 +42,7 @@ const decodeElicitationSchema = Schema.decodeUnknownSync(
   Schema.fromJsonString(AcpSchema.ElicitationSchema),
 );
 const elicitationResponseLogPath = process.env.T3_ACP_ELICITATION_RESPONSE_LOG_PATH;
+const emitOptionalFieldElicitation = process.env.T3_ACP_EMIT_OPTIONAL_FIELD_ELICITATION;
 const grokKillTaskShape = process.env.T3_ACP_GROK_KILL_TASK_SHAPE;
 const activeToolOutcome = process.env.T3_ACP_ACTIVE_TOOL_OUTCOME;
 const emitGrokBackgroundTaskPoll = process.env.T3_ACP_GROK_BACKGROUND_TASK_COMPLETION === "poll";
@@ -1620,6 +1621,23 @@ const program = Effect.gen(function* () {
         });
         if (elicitationResponseLogPath)
           NodeFS.appendFileSync(elicitationResponseLogPath, `${encodeJson(response)}\n`, "utf8");
+        return yield* finishPrompt(requestedSessionId, "end_turn");
+      }
+
+      if (emitOptionalFieldElicitation) {
+        yield* agent.client.elicit({
+          sessionId: requestedSessionId,
+          message: "Pick a color",
+          mode: "form",
+          requestedSchema: {
+            type: "object",
+            properties: {
+              color: { type: "string", title: "Color", enum: ["red", "blue"] },
+              note: { type: "string", title: "Note" },
+            },
+            ...(emitOptionalFieldElicitation === "without-required" ? {} : { required: ["color"] }),
+          },
+        });
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
