@@ -1,9 +1,6 @@
 import { type CSSProperties, memo } from "react";
 
 import {
-  ompModelIcon,
-  GEMINI_ICON_PATH,
-  MODEL_ICON_LABELS,
   normalizeProviderAccentColor,
   providerAccentForegroundColor,
   providerInstanceInitials,
@@ -62,7 +59,6 @@ export function resolveProviderInstanceAcpRegistryIconUrl(input: {
 
 export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   driverKind: ProviderDriverKind;
-  ompModel?: string | undefined;
   displayName: string;
   accentColor?: string | undefined;
   acpRegistryAgentId?: string | undefined;
@@ -73,14 +69,10 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   className?: string;
   iconClassName?: string;
   badgeClassName?: string;
-  statusDotClassName?: string;
   indicatorBackground?: string;
 }) {
-  const modelIcon = ompModelIcon(props.ompModel);
-  const iconDriver =
-    modelIcon && modelIcon !== "gemini" ? ProviderDriverKind.make(modelIcon) : props.driverKind;
-  const Icon = PROVIDER_ICON_BY_PROVIDER[iconDriver] ?? null;
-  const packageIcon = providerClients.get(iconDriver)?.icon;
+  const Icon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
+  const packageIcon = providerClients.get(props.driverKind)?.icon;
   const indicatorBackground = props.indicatorBackground ?? "var(--card)";
   const accentColor = normalizeProviderAccentColor(props.accentColor);
   const accentStyle = accentColor
@@ -106,19 +98,8 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
       )}
       style={accentStyle}
       data-provider-accent-color={accentColor}
-      role={modelIcon ? "img" : undefined}
-      aria-label={modelIcon ? `${MODEL_ICON_LABELS[modelIcon]} model` : undefined}
     >
-      {modelIcon === "gemini" ? (
-        <svg
-          viewBox="0 0 24 24"
-          fill="currentColor"
-          aria-hidden
-          className={cn("size-5 shrink-0", iconClassName)}
-        >
-          <path d={GEMINI_ICON_PATH} />
-        </svg>
-      ) : isAcpRegistry && !modelIcon ? (
+      {isAcpRegistry ? (
         <AcpRegistryAgentIcon
           className={cn("size-5 rounded-none bg-transparent", iconClassName)}
           fallbackClassName="size-full"
@@ -137,16 +118,6 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
           {providerInstanceInitials(props.displayName)}
         </span>
       )}
-      {props.statusDotClassName ? (
-        <span
-          className={cn(
-            "pointer-events-none absolute -left-0.5 -top-0.5 z-10 size-2 rounded-full",
-            props.statusDotClassName,
-          )}
-          style={{ boxShadow: `0 0 0 2px ${indicatorBackground}` }}
-          aria-hidden
-        />
-      ) : null}
       {props.showBadge ? (
         <span
           className={cn(

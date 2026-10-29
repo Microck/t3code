@@ -3,23 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 import { acpElicitationQuestions } from "./adapter.ts";
 
 describe("ACP elicitation choices", () => {
-  it("keeps OMP titled choices and the separate optional free-text answer", () => {
-    const properties = {
-      q0: { type: "string", title: "Choose", oneOf: [{ const: "Beta", title: "Beta" }] },
-      q0__other: { type: "string", title: "Other (type your own)" },
-    };
-    const questions = acpElicitationQuestions(properties, "Choose");
-    expect(questions.map(({ id, required, options }) => ({ id, required, options }))).toEqual([
-      {
-        id: "q0",
-        required: false,
-        options: [{ label: "Beta", value: "Beta", description: "Beta" }],
-      },
-      { id: "q0__other", required: false, options: [] },
-    ]);
-    expect(acpElicitationQuestions(properties, "Choose", ["q0"])[0]?.required).toBeUndefined();
-  });
-
   it("preserves titled single-select values and descriptions", () => {
     const [question] = acpElicitationQuestions(
       {
@@ -37,7 +20,6 @@ describe("ACP elicitation choices", () => {
       "Answer the question",
     );
     expect(question).toEqual({
-      required: false,
       id: "q0",
       header: "Choice display test",
       question: "Which choices can you see?",
@@ -97,7 +79,6 @@ describe("ACP elicitation choices", () => {
       ),
     ).toEqual([
       {
-        required: false,
         id: "color",
         header: "Question 1",
         question: "Choose",
@@ -107,7 +88,6 @@ describe("ACP elicitation choices", () => {
         ],
       },
       {
-        required: false,
         id: "approved",
         header: "Question 2",
         question: "Choose",
@@ -116,13 +96,7 @@ describe("ACP elicitation choices", () => {
           { label: "false", description: "No" },
         ],
       },
-      {
-        required: false,
-        id: "q0__other",
-        header: "Other (type your own)",
-        question: "Choose",
-        options: [],
-      },
+      { id: "q0__other", header: "Other (type your own)", question: "Choose", options: [] },
     ]);
   });
 

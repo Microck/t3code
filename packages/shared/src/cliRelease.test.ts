@@ -1,32 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  cliArchiveTarCommand,
-  cliReleaseHasArchive,
-  cliReleaseTagUrl,
-  newestCliReleaseVersion,
-  parseChecksums,
-} from "./cliRelease.ts";
+import { cliArchiveTarCommand, newestCliReleaseVersion, parseChecksums } from "./cliRelease.ts";
 
 describe("cliRelease", () => {
-  it("requires the matching platform archive and checksums from the selected distribution", () => {
-    const version = "0.1.2-nightly.20261021.347300006";
-    const assets = [`t3-${version}-linux-arm64.tar.gz`, "SHA256SUMS"];
-    expect(cliReleaseHasArchive(assets, version, { os: "linux", arch: "arm64" })).toBe(true);
-    expect(cliReleaseHasArchive(assets, version, { os: "linux", arch: "x64" })).toBe(false);
-    expect(cliReleaseHasArchive(assets.slice(0, 1), version, { os: "linux", arch: "arm64" })).toBe(
-      false,
-    );
-    expect(cliReleaseHasArchive(assets, "1.0.0", { os: "linux", arch: "arm64" })).toBe(false);
-    expect(
-      cliReleaseHasArchive([`t3-${version}-win32-x64.zip`, "SHA256SUMS"], version, {
-        os: "windows",
-        arch: "x64",
-      }),
-    ).toBe(true);
-    expect(cliReleaseHasArchive(assets, version, { os: "unknown", arch: "other" })).toBe(false);
-    expect(cliReleaseTagUrl(version)).toMatch(`/releases/tags/v${version}`);
-  });
   it("parses sha256sum output including binary-mode markers", () => {
     const checksums = parseChecksums(
       [

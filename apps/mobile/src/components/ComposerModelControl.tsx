@@ -17,8 +17,8 @@ export function ComposerModelControl(props: {
   readonly prompt: string;
   readonly surfaceColor: string;
   readonly disabled?: boolean;
+  readonly size?: "regular" | "large";
   readonly iconOnly?: boolean;
-  readonly showSummary?: boolean;
   readonly onPress: () => void;
 }) {
   const descriptors = resolveProviderOptionDescriptors({
@@ -48,12 +48,12 @@ export function ComposerModelControl(props: {
       ]
         .filter(Boolean)
         .join(", ")}
+      size={props.size}
       disabled={props.disabled}
       emphasized
       renderIcon={(size) =>
         badge?.showBadge ? (
           <ProviderInstanceIcon
-            ompModel={props.modelOption?.ompModel}
             iconUrl={props.modelOption?.providerIconUrl}
             provider={props.modelOption?.providerDriver}
             displayName={badge.displayName}
@@ -64,18 +64,24 @@ export function ComposerModelControl(props: {
           />
         ) : (
           <ProviderIcon
-            ompModel={props.modelOption?.ompModel}
             iconUrl={props.modelOption?.providerIconUrl}
             provider={props.modelOption?.providerDriver}
             size={size}
           />
         )
       }
-      label={label}
+      label={props.modelOption?.shortName ?? label}
       iconOnly={props.iconOnly}
       suffix={
-        props.showSummary !== false && summary ? (
-          <Text className="text-xs text-foreground-muted" numberOfLines={1}>
+        summary ? (
+          <Text
+            className={
+              props.size === "large"
+                ? "text-sm text-foreground-muted"
+                : "text-xs text-foreground-muted"
+            }
+            numberOfLines={1}
+          >
             {summary}
           </Text>
         ) : undefined

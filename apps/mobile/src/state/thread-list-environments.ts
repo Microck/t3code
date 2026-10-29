@@ -1,4 +1,3 @@
-import { isOmpProvider } from "@t3tools/client-runtime/state/provider-instance-display";
 import {
   resolveEnvironmentMachineKind,
   type EnvironmentId,
@@ -11,17 +10,9 @@ import { Atom } from "effect/reactivity";
 export type ThreadListProvider = Pick<
   ServerProvider,
   "instanceId" | "driver" | "enabled" | "displayName" | "accentColor" | "iconUrl"
-> & { readonly isOmp?: boolean };
+>;
 
-const capabilityKeys = [
-  "threadSettlement",
-  "threadSnooze",
-  "threadPinning",
-  "threadAutoSettleOptOut",
-  "threadPinReorder",
-  "threadActiveReorder",
-  "threadTitleRegeneration",
-] as const;
+const capabilityKeys = ["threadAutoSettleOptOut"] as const;
 
 function selectEnvironment(config: ServerConfig) {
   return {
@@ -33,11 +24,11 @@ function selectEnvironment(config: ServerConfig) {
         displayName,
         accentColor,
         iconUrl,
-        isOmp: isOmpProvider(config.settings.providerInstances[instanceId]),
       }),
     ),
     machineKind: resolveEnvironmentMachineKind(config),
     capabilities: config.environment.capabilities,
+    snoozePresets: config.settings.snoozePresets,
   };
 }
 
@@ -57,7 +48,6 @@ function sameProviders(
         provider.enabled === other.enabled &&
         provider.displayName === other.displayName &&
         provider.accentColor === other.accentColor &&
-        provider.isOmp === other.isOmp &&
         provider.iconUrl === other.iconUrl
       );
     })
@@ -67,34 +57,28 @@ function sameProviders(
 function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnvironment>) {
   const providersByEnvironmentId = new Map<EnvironmentId, ReadonlyArray<ThreadListProvider>>();
   const machineByEnvironmentId = new Map<EnvironmentId, EnvironmentMachineKind>();
-  const settlementEnvironmentIds = new Set<EnvironmentId>();
-  const snoozeEnvironmentIds = new Set<EnvironmentId>();
-  const pinningEnvironmentIds = new Set<EnvironmentId>();
+  // Every protocol-2 server supports these thread actions; they only wait for its config.
+  const loadedEnvironmentIds = new Set<EnvironmentId>();
   const autoSettleOptOutEnvironmentIds = new Set<EnvironmentId>();
-  const pinReorderEnvironmentIds = new Set<EnvironmentId>();
-  const activeReorderEnvironmentIds = new Set<EnvironmentId>();
-  const titleRegenerationEnvironmentIds = new Set<EnvironmentId>();
-  for (const [id, { providers, machineKind, capabilities }] of environments) {
+  const snoozePresetsByEnvironmentId = new Map<EnvironmentId, ListEnvironment["snoozePresets"]>();
+  for (const [id, { providers, machineKind, capabilities, snoozePresets }] of environments) {
     providersByEnvironmentId.set(id, providers);
+    snoozePresetsByEnvironmentId.set(id, snoozePresets);
     machineByEnvironmentId.set(id, machineKind);
-    if (capabilities.threadSettlement === true) settlementEnvironmentIds.add(id);
-    if (capabilities.threadSnooze === true) snoozeEnvironmentIds.add(id);
+    loadedEnvironmentIds.add(id);
     if (capabilities.threadAutoSettleOptOut === true) autoSettleOptOutEnvironmentIds.add(id);
-    if (capabilities.threadPinning === true) pinningEnvironmentIds.add(id);
-    if (capabilities.threadPinReorder === true) pinReorderEnvironmentIds.add(id);
-    if (capabilities.threadActiveReorder === true) activeReorderEnvironmentIds.add(id);
-    if (capabilities.threadTitleRegeneration === true) titleRegenerationEnvironmentIds.add(id);
   }
   return {
     providersByEnvironmentId,
     machineByEnvironmentId,
-    settlementEnvironmentIds,
-    snoozeEnvironmentIds,
-    pinningEnvironmentIds,
+    settlementEnvironmentIds: loadedEnvironmentIds,
+    snoozeEnvironmentIds: loadedEnvironmentIds,
+    pinningEnvironmentIds: loadedEnvironmentIds,
     autoSettleOptOutEnvironmentIds,
-    pinReorderEnvironmentIds,
-    activeReorderEnvironmentIds,
-    titleRegenerationEnvironmentIds,
+    pinReorderEnvironmentIds: loadedEnvironmentIds,
+    activeReorderEnvironmentIds: loadedEnvironmentIds,
+    titleRegenerationEnvironmentIds: loadedEnvironmentIds,
+    snoozePresetsByEnvironmentId,
   };
 }
 
@@ -113,10 +97,14 @@ export function createThreadListEnvironmentsAtom(
       if (prior && sameProviders(prior.providers, selected.providers)) {
         selected.providers = prior.providers;
       }
+      if (prior && JSON.stringify(prior.snoozePresets) === JSON.stringify(selected.snoozePresets)) {
+        selected.snoozePresets = prior.snoozePresets;
+      }
       const unchanged =
         prior &&
         prior.providers === selected.providers &&
         prior.machineKind === selected.machineKind &&
+        prior.snoozePresets === selected.snoozePresets &&
         capabilityKeys.every(
           (key) => (prior.capabilities[key] === true) === (selected.capabilities[key] === true),
         );

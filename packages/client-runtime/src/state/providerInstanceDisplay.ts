@@ -3,51 +3,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderDriverKind,
   type ServerProvider,
-  type ProviderInstanceConfig,
 } from "@t3tools/contracts";
-
-/** Local ACP commands have no registry identity; labels can be renamed. */
-export function isOmpProvider(
-  instance: Pick<ProviderInstanceConfig, "driver" | "config"> | undefined,
-): boolean {
-  if (instance?.driver !== "acpRegistry") return false;
-  const config = instance.config;
-  return (
-    typeof config === "object" &&
-    config !== null &&
-    "source" in config &&
-    config.source === "local" &&
-    "commandPath" in config &&
-    typeof config.commandPath === "string" &&
-    /^omp(?:\.exe|\.cmd|\.bat)?$/i.test(config.commandPath.split(/[\\/]/).at(-1) ?? "") &&
-    "commandArgs" in config &&
-    Array.isArray(config.commandArgs) &&
-    config.commandArgs[0] === "acp"
-  );
-}
-
-/** Resolve the model family, not its gateway. Opaque custom IDs retain the agent icon. */
-export function ompModelIcon(
-  model: string | undefined,
-): "codex" | "claudeAgent" | "gemini" | "grok" | null {
-  const id = model?.trim().toLowerCase().split("/").at(-1) ?? "";
-  if (/^(?:gpt[-.]|o\d(?:[-.]|$)|codex(?:[-.]|$))/.test(id)) return "codex";
-  if (/^claude[-.]/.test(id)) return "claudeAgent";
-  if (/^gemini[-.]/.test(id)) return "gemini";
-  if (/^grok[-.]/.test(id)) return "grok";
-  return null;
-}
-
-export const MODEL_ICON_LABELS = {
-  codex: "OpenAI",
-  claudeAgent: "Anthropic",
-  gemini: "Google Gemini",
-  grok: "xAI",
-} as const;
-
-// Google Gemini mark from Simple Icons (CC0), shared by web and native rendering.
-export const GEMINI_ICON_PATH =
-  "M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81";
 
 function humanizeSlug(slug: string): string {
   return slug
@@ -71,7 +27,14 @@ export function resolveProviderInstanceDisplayName(
 }
 
 export function providerInstanceInitials(label: string): string {
-  const words = label.replace(/[_-]+/g, " ").split(/\s+/u).filter(Boolean);
+  // Punctuation separates words so "Codex (hub)" reads CH, not C(. An apostrophe
+  // inside a word stays ("Theo's Codex" is TC); a quoting one does not
+  // ("Codex 'hub'" is CH).
+  const words = label
+    .replace(/[^\P{P}'’]+/gu, " ")
+    .split(/\s+/u)
+    .map((word) => word.replace(/^['’]+|['’]+$/gu, ""))
+    .filter(Boolean);
   if (words.length === 0) return "";
   if (words.length === 1) return Array.from(words[0]!).slice(0, 2).join("").toUpperCase();
   return words
