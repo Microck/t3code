@@ -200,6 +200,7 @@ export function parseElicitationForm(
       header: text(property.title) ?? `Question ${questions.length + 1}`,
       question: text(property.description) ?? message,
       options: parsed.options,
+      ...(required.has(id) ? {} : { required: false }),
       ...(parsed.field.kind === "text" || parsed.field.kind === "number"
         ? {}
         : { allowCustomAnswer: false }),
