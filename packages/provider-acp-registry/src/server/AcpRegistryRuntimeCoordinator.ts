@@ -66,10 +66,7 @@ export class AcpRegistryRuntimeCoordinator extends Context.Service<
       instanceId: ProviderInstanceId,
       onUpdate: (commands: AcpRegistryAvailableCommands) => Effect.Effect<void>,
     ) => Effect.Effect<void>;
-    readonly clearLiveConfiguration: (
-      instanceId: ProviderInstanceId,
-      reason: string,
-    ) => Effect.Effect<void>;
+    readonly clearLiveConfiguration: (instanceId: ProviderInstanceId) => Effect.Effect<void>;
     readonly publishLiveConfiguration: (
       instanceId: ProviderInstanceId,
       configuration: AcpRegistryLiveConfiguration,
@@ -143,8 +140,7 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.scoped(
       Effect.gen(function* () {
-        // Subscribe before checking state so a foreground start cannot land
-        // in the gap between the check and the interruptible probe.
+        // Subscribe first so foreground starts cannot slip between the state check and probe.
         const subscription = yield* PubSub.subscribe(foregroundStarts);
         if ((yield* Ref.get(activeForegroundCounts)).has(agentId)) {
           return Option.none();
@@ -154,7 +150,7 @@ const make = Effect.gen(function* () {
           Stream.runHead,
           Effect.as(Option.none()),
         );
-        return yield* Effect.raceFirst(effect.pipe(Effect.map(Option.some)), foregroundStarted);
+        return yield* Effect.raceFirst(effect.pipe(Effect.asSome), foregroundStarted);
       }),
     );
 
@@ -195,8 +191,7 @@ const make = Effect.gen(function* () {
     (instanceId, onUpdate) =>
       Effect.scoped(
         Effect.gen(function* () {
-          // Subscribe before reading the current value so a publication in
-          // between is either observed from the snapshot, the queue, or both.
+          // Subscribe before reading to avoid missing publications.
           const subscription = yield* PubSub.subscribe(availableCommandsUpdates);
           const current = yield* getAvailableCommands(instanceId);
           if (Option.isSome(current)) {
@@ -210,27 +205,18 @@ const make = Effect.gen(function* () {
       );
 
   const clearLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["clearLiveConfiguration"] =
-    (instanceId, reason) =>
+    (instanceId) =>
       Ref.update(liveConfigurationByInstance, (current) => {
         const next = new Map(current);
         next.delete(instanceId);
         return next;
-      }).pipe(
-        Effect.tap(() => Effect.logInfo("ACP live configuration cleared", { instanceId, reason })),
-      );
+      });
 
   const publishLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["publishLiveConfiguration"] =
     (instanceId, configuration) =>
       Ref.update(liveConfigurationByInstance, (current) =>
         new Map(current).set(instanceId, configuration),
       ).pipe(
-        Effect.tap(() =>
-          Effect.logInfo("ACP live configuration published", {
-            instanceId,
-            modelCount: configuration.models.length,
-            optionCount: configuration.configOptions.length,
-          }),
-        ),
         Effect.andThen(
           PubSub.publish(liveConfigurationUpdates, {
             instanceId,

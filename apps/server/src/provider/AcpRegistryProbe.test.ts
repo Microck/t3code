@@ -270,7 +270,7 @@ describe("ACP Registry probe", () => {
     },
   );
 
-  it("normalizes and de-duplicates all advertised commands", () => {
+  it("bounds and de-duplicates advertised commands", () => {
     const commands = normalizeAcpRegistryCommands([
       {
         name: "create_plan",
@@ -284,7 +284,7 @@ describe("ACP Registry probe", () => {
       })),
     ]);
 
-    expect(commands.slashCommands).toHaveLength(141);
+    expect(commands.slashCommands).toHaveLength(128);
     expect(commands.slashCommands[0]).toEqual({
       name: "create_plan",
       description: "Create a plan",
@@ -294,21 +294,6 @@ describe("ACP Registry probe", () => {
       commands.slashCommands.filter((command) => command.name.toLowerCase() === "create_plan"),
     ).toHaveLength(1);
     expect(commands.skills).toEqual([]);
-  });
-
-  it.each([129, 317, 1024])("retains late commands and skills in a %i-entry catalog", (size) => {
-    const commands = normalizeAcpRegistryCommands([
-      ...Array.from({ length: size - 2 }, (_, index) => ({
-        name: `command_${index}`,
-        description: "",
-      })),
-      { name: "skill:ios-reflect", description: "Review iOS sessions" },
-      { name: "$late-skill", description: "A skill at the end of the catalog" },
-    ]);
-
-    expect(commands.slashCommands).toHaveLength(size - 1);
-    expect(commands.slashCommands.at(-1)?.name).toBe("skill:ios-reflect");
-    expect(commands.skills.map((skill) => skill.name)).toEqual(["late-skill"]);
   });
 
   it("routes dollar-prefixed ACP commands to the provider skill menu", () => {

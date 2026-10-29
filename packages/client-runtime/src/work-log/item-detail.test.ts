@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { readOmpTaskProgress, ompAgentMetrics, ompAgentStatus } from "./itemDetail.ts";
+import { readOmpTaskProgress, ompAgentMetrics, ompAgentStatus } from "./itemDetail";
 
 const progress = {
   index: 0,
