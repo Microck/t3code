@@ -3,6 +3,32 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseElicitationForm } from "./elicitationForm.ts";
 
 describe("ACP elicitation choices", () => {
+  it("keeps OMP titled choices and the separate optional free-text answer", () => {
+    const properties = {
+      q0: { type: "string", title: "Choose", oneOf: [{ const: "Beta", title: "Beta" }] },
+      q0__other: { type: "string", title: "Other (type your own)" },
+    };
+    const form = parseElicitationForm({ type: "object", properties }, "Choose");
+    const questions = form?.questions ?? [];
+    expect(questions.map(({ id, required, options }) => ({ id, required, options }))).toEqual([
+      {
+        id: "q0",
+        required: false,
+        options: [{ label: "Beta", value: "Beta", description: "Beta" }],
+      },
+      { id: "q0__other", required: false, options: [] },
+    ]);
+    const required = parseElicitationForm(
+      { type: "object", properties, required: ["q0"] },
+      "Choose",
+    );
+    expect(required).toBeDefined();
+    expect(required?.questions[0]?.required).toBeUndefined();
+    expect(required?.content({})).toBeUndefined();
+    expect(form?.content({})).toEqual({});
+    expect(form?.content({ q0__other: "custom" })).toEqual({ q0__other: "custom" });
+  });
+
   it("preserves titled single-select values and descriptions", () => {
     const form = parseElicitationForm(
       {
@@ -111,7 +137,12 @@ describe("ACP elicitation choices", () => {
           { label: "false", value: "false", description: "No" },
         ],
       },
-      { id: "q0__other", header: "Other (type your own)", question: "Choose", options: [] },
+      {
+        id: "q0__other",
+        header: "Other (type your own)",
+        question: "Choose",
+        options: [],
+      },
     ]);
     expect(form?.content({ color: "red", approved: "false", q0__other: "custom" })).toEqual({
       color: "red",
