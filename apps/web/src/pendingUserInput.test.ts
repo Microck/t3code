@@ -1,5 +1,6 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { buildPendingUserInputAnswers } from "@t3tools/client-runtime/state/pending-user-input";
 import { formatInlineContextReference } from "./lib/composerContextReferences";
 import { threadContextReference } from "./lib/composerContextRecords";
 import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
@@ -114,6 +115,49 @@ describe("pending user input question progress", () => {
       isComplete: false,
       canAdvance: true,
     });
+  });
+  it("lets an unanswered optional question advance and leaves it out of the answers", () => {
+    const other = {
+      id: "scope__other",
+      header: "Other (type your own)",
+      question: "Which scope should this use?",
+      options: [],
+      multiSelect: false,
+      required: false,
+    };
+    const drafts = { scope: { selectedOptionValues: ["Orchestration-first"] } };
+    expect(
+      buildPendingUserInputAnswers([{ ...singleSelectQuestion, required: false }, other], {
+        scope__other: { customAnswer: "My own answer" },
+      }),
+    ).toEqual({ scope__other: "My own answer" });
+
+    expect(buildPendingUserInputAnswers([singleSelectQuestion, other], drafts)).toEqual({
+      scope: "Orchestration-first",
+    });
+    expect(
+      buildPendingUserInputAnswers([singleSelectQuestion, other], {
+        ...drafts,
+        scope__other: { customAnswer: "Another scope" },
+      }),
+    ).toEqual({ scope: "Orchestration-first", scope__other: "Another scope" });
+    expect(buildPendingUserInputAnswers([singleSelectQuestion, other], {})).toBeNull();
+    expect(buildPendingUserInputAnswers([{ ...other, required: true }], {})).toBeNull();
+    expect(derivePendingUserInputProgress([other, singleSelectQuestion], {}, 0)).toMatchObject({
+      canAdvance: true,
+      isComplete: false,
+    });
+    expect(derivePendingUserInputProgress([singleSelectQuestion, other], drafts, 1)).toMatchObject({
+      resolvedAnswer: null,
+      canAdvance: true,
+      isComplete: true,
+    });
+    expect(
+      buildPendingUserInputAnswers([singleSelectQuestion, other], {
+        ...drafts,
+        scope__other: { attachmentCount: 1, attachmentsBlocked: true },
+      }),
+    ).toBeNull();
   });
 });
 

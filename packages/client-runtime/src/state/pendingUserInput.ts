@@ -5,6 +5,7 @@ export interface PendingUserInputQuestion {
   readonly multiSelect?: boolean | undefined;
   readonly allowCustomAnswer?: boolean | undefined;
   readonly initialAnswer?: string | undefined;
+  readonly required?: boolean | undefined;
 }
 
 export interface PendingUserInputDraftAnswer {
@@ -157,7 +158,15 @@ export function togglePendingUserInputOptionSelection(
   };
 }
 
-/** Every question's answer keyed by question id, or null while any is unanswered. */
+// Blocked attachments still hold the reply back, even on an optional question.
+export function canSkipPendingUserInputQuestion(
+  question: PendingUserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined,
+): boolean {
+  return question.required === false && !draft?.attachmentsBlocked;
+}
+
+/** Answer map omitting blank optional fields, or null while a required answer is missing. */
 export function buildPendingUserInputAnswers(
   questions: ReadonlyArray<PendingUserInputQuestion>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
@@ -165,8 +174,10 @@ export function buildPendingUserInputAnswers(
   const answers: Record<string, PendingUserInputAnswer> = {};
 
   for (const question of questions) {
-    const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
+    const draft = draftAnswers[question.id];
+    const answer = resolvePendingUserInputAnswer(question, draft);
     if (answer === null) {
+      if (canSkipPendingUserInputQuestion(question, draft)) continue;
       return null;
     }
     answers[question.id] = answer;

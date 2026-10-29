@@ -1004,7 +1004,10 @@ function selectAutoApprovedPermissionOption(
 export function acpElicitationQuestions(
   properties: Record<string, unknown>,
   message: string,
+  required: ReadonlyArray<string> = [],
 ): OrchestrationV2UserInputQuestion[] {
+  // An omitted JSON Schema required list means every field is optional.
+  const requiredFields = new Set(required);
   return Object.entries(properties).map(([id, property], index) => {
     const record = unknownRecord(property);
     const multiSelect = record?.type === "array";
@@ -1047,6 +1050,7 @@ export function acpElicitationQuestions(
       question: nonEmptyText(record?.description, message),
       options,
       ...(multiSelect ? { multiSelect: true } : {}),
+      ...(requiredFields.has(id) ? {} : { required: false }),
     };
   });
 }
@@ -6276,8 +6280,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               const nativeForm = flavor.extractElicitationForm?.(params);
               const elicitationScopeId =
                 "sessionId" in params ? params.sessionId : `request:${params.requestId}`;
+              const requiredFields = Array.isArray(requestedSchema?.required)
+                ? requestedSchema.required.filter(
+                    (field): field is string => typeof field === "string",
+                  )
+                : [];
               const questions =
-                nativeForm?.questions ?? acpElicitationQuestions(properties, params.message);
+                nativeForm?.questions ??
+                acpElicitationQuestions(properties, params.message, requiredFields);
               const userInput = yield* requestUserInputWithAdmission(
                 handlerGeneration,
                 Effect.gen(function* () {

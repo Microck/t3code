@@ -166,6 +166,41 @@ const compatQuestion = {
 } as const;
 
 describe("buildPendingUserInputAnswers", () => {
+  it("leaves an unanswered optional question out instead of blocking the reply", () => {
+    const other = {
+      id: "scope__other",
+      header: "Other (type your own)",
+      question: "Which scope should be used?",
+      options: [],
+      multiSelect: false,
+      required: false,
+    };
+    const drafts = { scope: { selectedOptionValues: ["Orchestration-first"] } };
+    expect(
+      buildPendingUserInputAnswers([{ ...singleSelectQuestion, required: false }, other], {
+        scope__other: { customAnswer: "My own answer" },
+      }),
+    ).toEqual({ scope__other: "My own answer" });
+
+    expect(buildPendingUserInputAnswers([singleSelectQuestion, other], drafts)).toEqual({
+      scope: "Orchestration-first",
+    });
+    expect(
+      buildPendingUserInputAnswers([singleSelectQuestion, other], {
+        ...drafts,
+        scope__other: { customAnswer: "Another scope" },
+      }),
+    ).toEqual({ scope: "Orchestration-first", scope__other: "Another scope" });
+    expect(buildPendingUserInputAnswers([{ ...other, required: true }], {})).toBeNull();
+    expect(
+      buildPendingUserInputAnswers([singleSelectQuestion, other], {
+        ...drafts,
+        scope__other: { attachmentCount: 1, attachmentsBlocked: true },
+      }),
+    ).toBeNull();
+    expect(buildPendingUserInputAnswers([singleSelectQuestion, other], {})).toBeNull();
+  });
+
   it("returns a canonical answer map for complete prompts", () => {
     expect(
       buildPendingUserInputAnswers([singleSelectQuestion, compatQuestion], {
