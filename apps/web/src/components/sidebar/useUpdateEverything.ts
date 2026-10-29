@@ -1,11 +1,14 @@
 import { useAtomValue } from "@effect/atom-react";
 import { PROVIDER_DISPLAY_NAMES } from "@t3tools/contracts";
 
+import { cliReleaseHasArchive } from "@t3tools/shared/cliRelease";
+
 import { APP_VERSION } from "~/branding";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isElectron } from "~/env";
 import { useEnvironments } from "~/state/environments";
 import { useNpmReleasePublished } from "~/state/npmRelease";
+import { useCliReleaseAssets } from "~/state/cli-release";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { environmentUpdateStatesAtom } from "~/state/server";
 import { environmentSessionStatesAtom } from "~/state/session";
@@ -68,18 +71,36 @@ export function useUpdateEverything(
     canMaintain: canUpdateServer(sessionStates[index]!),
     updateState: updateStates[index]!,
   }));
-  // A track switch's target came from npm already.
   const {
     targets: behindServers,
     skipped: unreachable,
     waitForNpm,
   } = channelSwitch
     ? { ...collectChannelSwitchTargets(machines, channelSwitch), waitForNpm: [] }
-    : collectServerUpdateTargets(machines, targetVersion, localUpdateVersion !== null);
+    : // Archive-backed servers are checked against the distribution below. Older npm
+      // launchers still need npm publication, even if a fork archive exists.
+      collectServerUpdateTargets(machines, targetVersion, true);
   const published = useNpmReleasePublished(waitForNpm.length > 0 ? targetVersion : null);
-  const servers = published
-    ? behindServers
-    : behindServers.filter((server) => !waitForNpm.includes(server));
+  const needsArchive =
+    !channelSwitch &&
+    behindServers.some(
+      (server) => server.selfUpdate !== "desktop-managed" && !waitForNpm.includes(server),
+    );
+  const assets = useCliReleaseAssets(needsArchive ? targetVersion : null);
+  const servers = behindServers.filter((server) => {
+    // Explicit track switches already verified their release and database compatibility.
+    if (channelSwitch) return true;
+    if (server.selfUpdate === "desktop-managed") return true;
+    if (waitForNpm.includes(server)) return published;
+    const config = machines.find(
+      (machine) => machine.environmentId === server.environmentId,
+    )?.serverConfig;
+    return (
+      config !== null &&
+      config !== undefined &&
+      cliReleaseHasArchive(assets, server.targetVersion, config.environment.platform)
+    );
+  });
   const skipped: ReadonlyArray<SkippedMachine> = [
     ...unreachable,
     ...behindServers
@@ -87,7 +108,9 @@ export function useUpdateEverything(
       .map((server) => ({
         environmentId: server.environmentId,
         label: server.serverLabel,
-        reason: `t3@${targetVersion} is not on npm yet`,
+        reason: waitForNpm.includes(server)
+          ? `t3@${targetVersion} is not on npm yet`
+          : `No published ${targetVersion} archive for this machine in this distribution`,
       })),
   ];
   // Track-only hosts save a setting and restart nothing, so they are neither listed nor counted.

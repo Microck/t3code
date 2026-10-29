@@ -20,7 +20,7 @@ const CLI_ARCHIVE_PLATFORM_KEYS = [
 export type CliArchivePlatformKey = (typeof CLI_ARCHIVE_PLATFORM_KEYS)[number];
 
 export function cliArchivePlatformKey(
-  platform: NodeJS.Platform,
+  platform: string,
   arch: string,
 ): CliArchivePlatformKey | undefined {
   const key = `${platform}-${arch}`;
@@ -130,4 +130,23 @@ const decodeNpmReleaseMigrationManifest = Schema.decodeUnknownOption(NpmReleaseM
 export function npmReleaseDatabaseMigration(manifest: unknown): number | undefined {
   return Option.getOrUndefined(decodeNpmReleaseMigrationManifest(manifest))?.t3code
     .databaseMigration;
+}
+
+/** The tag endpoint follows the same distribution as the installer and CLI updater. */
+export function cliReleaseTagUrl(version: string): string {
+  return `https://api.github.com/repos/${CLI_RELEASE_REPOSITORY}/releases/tags/v${encodeURIComponent(version)}`;
+}
+
+export function cliReleaseHasArchive(
+  assets: ReadonlyArray<string>,
+  version: string,
+  platform: { readonly os: string; readonly arch: string },
+): boolean {
+  const os = platform.os === "windows" ? "win32" : platform.os;
+  const key = cliArchivePlatformKey(os, platform.arch);
+  return (
+    key !== undefined &&
+    assets.includes(CLI_RELEASE_CHECKSUMS_FILE) &&
+    assets.includes(cliArchiveFileName(version, key))
+  );
 }
