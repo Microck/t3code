@@ -20,7 +20,7 @@ const fixes: ReadonlyArray<{
   { pr: 20363, commit: "a6a2b2ae7a4c433d1cba3aaba48ab6a0a70bc296" },
   { pr: 21066, commit: "3dc6f65b586484d14b9eb94aef6b8eb60e5bef03" },
   { pr: 21770, commit: "669a88a2f2f15692ec2fdb9a70b0f12b23991d86" },
-  { pr: 21801, commit: "ca386e5e4eb161c0e2fe56d9b4a2a8064b634ba5" },
+  { pr: 21801, commit: "4ec8ea9941de082bf30847e4f4b6237f63229f5c" },
   { pr: 22972, commit: "35db61ab56c026cecc72dd07f7eafc7a2ffa09c5" },
   { pr: 26403, commit: "0a0f9e069605a862fb4db486e7a81a916b1b3691" },
   {
@@ -40,7 +40,7 @@ const fixes: ReadonlyArray<{
     label: "Native OMP wait jobs displayed as subagent status rows",
   },
   {
-    commit: "71c9757234a907568e9c9189bcc337ce373e17b3",
+    commit: "9561d1b51e57213a13d94c728521da76a164d2ef",
     label: "Distribution-aware remote update checks",
   },
   {
