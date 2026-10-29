@@ -39,10 +39,7 @@ const NATIVE_CLI_INSTANCE_ID = ProviderInstanceId.make("nativeCli");
 const OPENCODE_INSTANCE_ID = ProviderInstanceId.make("opencode");
 const encoder = new TextEncoder();
 
-// Pin a non-win32 platform so `resolveSpawnCommand` is a no-op and the raw
-// `{ command, args }` assertions below hold deterministically on any host
-// (including Windows). Windows-specific resolution is covered by the dedicated
-// win32 case at the end of this suite.
+// Pin Linux so raw command/args assertions bypass Windows shim resolution.
 const layerNonWindowsPlatform = Layer.succeed(HostProcess.Platform, "linux");
 
 function lifecycleFor(provider: ProviderDriverKind): ProviderMaintenanceCapabilities {
@@ -454,14 +451,43 @@ describe("providerMaintenanceRunner", () => {
       const updateState = result.providers[0]?.updateState;
 
       assert.strictEqual(updateState?.status, "failed");
-      assert.strictEqual(updateState?.message, "Update command exited with code 1.");
-      assert.include(updateState?.output ?? "", "permission denied");
+      assert.strictEqual(
+        updateState?.message,
+        "Update command exited with code 1: Error: Could not detect the Codex installation method.",
+      );
+      assert.include(updateState?.output ?? "", "checking install");
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
           layerNonWindowsPlatform,
           layerLatestVersionHttpClient("0.0.0"),
-          layerMockSpawner(() => ({ stderr: "permission denied", code: 1 })),
+          layerMockSpawner(() => ({
+            stdout: "checking install\n",
+            stderr: "Error: Could not detect the Codex installation method.\n\n",
+            code: 1,
+          })),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("keeps the exit code message when a failed command prints nothing", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeRegistry();
+      const updater = yield* makeTestRunner(registry);
+
+      const result = yield* updater.updateProvider(CODEX_DRIVER);
+
+      assert.strictEqual(
+        result.providers[0]?.updateState?.message,
+        "Update command exited with code 1.",
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          layerNonWindowsPlatform,
+          layerLatestVersionHttpClient("0.0.0"),
+          layerMockSpawner(() => ({ code: 1 })),
         ),
       ),
     ),
