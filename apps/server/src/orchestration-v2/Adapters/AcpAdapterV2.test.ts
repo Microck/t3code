@@ -7851,4 +7851,163 @@ describe("acpPostSettleContinuationOfferEvidence", () => {
       }),
     );
   });
+  it.effect.each([
+    ["failed", "resume"],
+    ["unacknowledged", "resume"],
+    ["failed", "load-only"],
+  ] as const)(
+    "recovers from %s cancellation with %s support on a fresh runtime",
+    ([cancellation, sessionSupport]) =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const path = yield* Path.Path;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+        const promptStarted = yield* Deferred.make<void>();
+        const cancelAttempted = yield* Deferred.make<void>();
+        const instanceId = ProviderInstanceId.make("acp-cancel-failure");
+        let runtimeCount = 0;
+        const makeRuntime = makeMockRuntime({
+          childProcessSpawner,
+          mockAgentPath,
+          protocolEvents,
+          ownDetachedProcessGroup: true,
+          wrapRuntime: (runtime, ordinal) => {
+            runtimeCount = ordinal;
+            const sessionRuntime =
+              sessionSupport === "load-only"
+                ? {
+                    ...runtime,
+                    start: () =>
+                      runtime.start().pipe(
+                        Effect.map((started) => ({
+                          ...started,
+                          initializeResult: {
+                            ...started.initializeResult,
+                            agentCapabilities: {
+                              ...started.initializeResult.agentCapabilities,
+                              loadSession: true,
+                              sessionCapabilities: {},
+                            },
+                          },
+                        })),
+                      ),
+                  }
+                : runtime;
+            return ordinal === 1
+              ? {
+                  ...sessionRuntime,
+                  prompt: () =>
+                    Deferred.succeed(promptStarted, undefined).pipe(Effect.andThen(Effect.never)),
+                  cancel: Deferred.succeed(cancelAttempted, undefined).pipe(
+                    Effect.andThen(
+                      cancellation === "failed"
+                        ? Effect.fail(
+                            EffectAcpErrors.AcpRequestError.internalError("cancel failed"),
+                          )
+                        : Effect.void,
+                    ),
+                  ),
+                }
+              : sessionRuntime;
+          },
+        });
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          selfInvocation: yield* resolveSelfInvocation(),
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            preferResumeSession: true,
+            terminateRuntimeProcessGroupOnInterrupt: true,
+            makeRuntime: (input) => {
+              const runtimeOptions = { ...input, resumeMethod: "resume" as const };
+              return makeRuntime(runtimeOptions);
+            },
+          },
+        });
+        const threadId = ThreadId.make("thread-acp-cancel-failure");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const session = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("session-acp-cancel-failure"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* session.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* session.startTurn(
+          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now }),
+        );
+        yield* Deferred.await(promptStarted);
+        const providerTurnId = idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: acpScopedNativeId(
+            instanceId,
+            `${providerThread.nativeThreadRef?.nativeId}:turn:1`,
+          ),
+        });
+        const interrupt = yield* session
+          .interruptTurn({ providerThread, providerTurnId })
+          .pipe(Effect.exit, Effect.forkScoped);
+        yield* Deferred.await(cancelAttempted);
+        yield* TestClock.adjust(cancellation === "failed" ? "2 seconds" : "10 seconds");
+        const result = yield* Fiber.join(interrupt);
+        assert.isTrue(Exit.isFailure(result));
+        if (Exit.isFailure(result)) {
+          if (cancellation === "failed") {
+            assert.include(Cause.pretty(result.cause), "cancel failed");
+          } else {
+            assert.instanceOf(
+              Cause.squash(result.cause),
+              ProviderAdapter.ProviderAdapterInterruptTimeoutError,
+            );
+          }
+        }
+        if (cancellation === "unacknowledged") {
+          assert.equal(runtimeCount, 1, "a soft Stop timeout keeps the agent runtime alive");
+          yield* session.interruptTurn({
+            providerThread,
+            providerTurnId,
+            requestRuntimeRestart: true,
+          });
+        }
+        yield* Queue.takeAll(protocolEvents);
+        yield* session.startTurn(
+          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 2 }),
+        );
+        assert.equal(runtimeCount, 2);
+        const terminals = yield* session.events.pipe(
+          Stream.takeUntil(
+            (event) => event.type === "turn.terminal" && event.providerTurnId !== providerTurnId,
+          ),
+          Stream.runCollect,
+        );
+        assert.deepEqual(
+          terminals.filter((event) => event.type === "turn.terminal").map((event) => event.status),
+          ["interrupted", "completed"],
+        );
+        const methods = (yield* Queue.takeAll(protocolEvents))
+          .filter((event) => event.direction === "outgoing")
+          .map(rawProtocolMethod);
+        if (sessionSupport === "load-only") {
+          assert.include(methods, "session/new");
+        } else {
+          assert.notInclude(methods, "session/new");
+        }
+        assert.equal(methods.filter((method) => method === "session/resume").length, 1);
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
 });
