@@ -4588,11 +4588,63 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   ),
             );
 
+        const emitUnreportedHtmlRenders = Effect.fnUntraced(function* (context: ActiveAcpTurn) {
+          // Wrappers may hide the native MCP call or truncate its result. Publish still owns the page.
+          const pages = yield* mcpSessions.takeUnreportedHtmlRenders(context.input.threadId);
+          for (const page of pages) {
+            const nativeItemId = `html-render:${page.attachmentId}`;
+            const now = yield* DateTime.now;
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver,
+              turnItem: {
+                id: providerTurnItemId(nativeItemId),
+                threadId: context.input.threadId,
+                runId: context.input.runId,
+                nodeId: context.input.rootNodeId,
+                providerThreadId: context.input.providerThread.id,
+                providerTurnId: context.providerTurnId,
+                nativeItemRef: { driver, nativeId: nativeItemId, strength: "weak" },
+                parentItemId: null,
+                ordinal: yield* resolveItemOrdinal(context, nativeItemId),
+                status: "completed",
+                title: null,
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                type: "dynamic_tool",
+                toolName: "t3-code.html_render",
+                input: {},
+                output: { htmlRender: page },
+              },
+            });
+          }
+        });
+
         const handleSessionUpdate = Effect.fnUntraced(function* (
           notification: EffectAcpSchema.SessionNotification,
         ) {
           const context = yield* Ref.get(activeTurn);
           const update = notification.update;
+          if (
+            context !== null &&
+            !context.finalized &&
+            !context.interrupted &&
+            !(yield* Ref.get(stoppedRunQuarantine)) &&
+            notification.sessionId === context.nativeThreadId &&
+            (update.sessionUpdate === "agent_message_chunk" ||
+              update.sessionUpdate === "agent_message")
+          ) {
+            let toolsSettled = true;
+            for (const tool of context.tools.values()) {
+              const status = toolStatus(tool.status);
+              if (status !== "completed" && status !== "failed") {
+                toolsSettled = false;
+                break;
+              }
+            }
+            if (toolsSettled) yield* emitUnreportedHtmlRenders(context);
+          }
           if (
             followsAgentWorkState &&
             flavor.extractSubagentSessionEvent !== undefined &&
@@ -7079,6 +7131,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               toolStatus: settledStatus === "failed" ? "failed" : "interrupted",
             });
           }
+          yield* emitUnreportedHtmlRenders(context);
           yield* closeTextStreams(context);
           if (settledStatus !== "failed") {
             yield* emitProviderRetry(context, settledStatus);

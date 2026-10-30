@@ -44,6 +44,9 @@ export class McpProviderSessions extends Context.Service<
       input: { readonly html?: unknown; readonly title?: unknown; readonly height?: unknown },
       reported?: HtmlRenderReference,
     ) => Effect.Effect<HtmlRenderReference | undefined>;
+    readonly takeUnreportedHtmlRenders: (
+      threadId: ThreadId,
+    ) => Effect.Effect<ReadonlyArray<HtmlRenderReference>>;
   }
 >()("@t3tools/provider-core/server/McpProviderSessions") {}
 
@@ -155,6 +158,16 @@ const make = Effect.gen(function* () {
         });
       },
     ),
+    // Called at streaming message boundaries, where an empty check needs no span.
+    takeUnreportedHtmlRenders: Effect.fnUntraced(function* (threadId) {
+      return yield* Ref.modify(htmlRenders, (current) => {
+        const pages = current.get(threadId);
+        if (pages === undefined) return [[], current];
+        const next = new Map(current);
+        next.delete(threadId);
+        return [pages.map((page) => page.reference), next];
+      });
+    }),
   });
 });
 

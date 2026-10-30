@@ -1366,6 +1366,114 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.effect("shows published HTML when an OMP wrapper truncates the render result", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+      const threadId = ThreadId.make("thread-wrapped-html");
+      const instanceId = ProviderInstanceId.make("wrapped-html");
+      let send:
+        | Parameters<AcpSessionRuntime.AcpSessionRuntime["Service"]["handleSessionUpdate"]>[0]
+        | undefined;
+      const page = { html: "<p>Options</p>", title: "Options", height: 400 };
+      const reference = { attachmentId: "wrapped-html-board", title: "Options", height: 400 };
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        selfInvocation: yield* resolveSelfInvocation(),
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+            mockAgentPath: yield* path.fromFileUrl(
+              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+            ),
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleSessionUpdate: (handler) => {
+                send = handler;
+                return runtime.handleSessionUpdate(handler);
+              },
+              prompt: () =>
+                Effect.gen(function* () {
+                  assert.isDefined(send);
+                  yield* mcpSessions.recordHtmlRender(threadId, page, reference);
+                  // A normally projected render has already consumed its own published page.
+                  const shown = { ...reference, attachmentId: "already-shown" };
+                  yield* mcpSessions.recordHtmlRender(threadId, page, shown);
+                  yield* mcpSessions.takeHtmlRender(threadId, page, shown);
+                  yield* send!({
+                    sessionId: "mock-session-1",
+                    update: {
+                      sessionUpdate: "tool_call",
+                      toolCallId: "wrapper",
+                      title: "Render options",
+                      kind: "execute",
+                      status: "completed",
+                      rawInput: { command: "[js] Render options" },
+                      rawOutput: JSON.stringify({ htmlRender: reference }).slice(0, 40),
+                    },
+                  });
+                  yield* send!({
+                    sessionId: "mock-session-1",
+                    update: {
+                      sessionUpdate: "agent_message_chunk",
+                      content: { type: "text", text: "Choose an option." },
+                    },
+                  });
+                  return { stopReason: "end_turn" as const };
+                }),
+            }),
+          }),
+        },
+      });
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" };
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("wrapped-html-session"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          ordinal: 1,
+          now: yield* DateTime.now,
+        }),
+      );
+      const events = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+      );
+      const items = events.flatMap((event) =>
+        event.type === "turn_item.updated" ? [event.turnItem] : [],
+      );
+      const boards = items.filter(
+        (item) => item.type === "dynamic_tool" && item.toolName === "t3-code.html_render",
+      );
+      assert.lengthOf(boards, 1);
+      assert.deepEqual(boards[0]?.type === "dynamic_tool" ? boards[0].output : undefined, {
+        htmlRender: reference,
+      });
+      const firstReply = items.find((item) => item.type === "assistant_message");
+      assert.isBelow(boards[0]!.ordinal, firstReply!.ordinal);
+      assert.deepEqual(yield* mcpSessions.takeUnreportedHtmlRenders(threadId), []);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("starts a new replay message after ACP v2 plan boundaries", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;

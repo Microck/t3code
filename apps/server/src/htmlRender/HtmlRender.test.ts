@@ -240,6 +240,13 @@ describe("HtmlRender", () => {
       const reused = yield* htmlRender.publish({ threadId, ...page });
       yield* mcpSessions.set({ ...session, browserToolsAvailable: true });
       expect(yield* mcpSessions.takeHtmlRender(threadId, page)).toEqual(reused);
+      const hidden = yield* htmlRender.publish({ threadId, ...page });
+      expect(yield* mcpSessions.takeUnreportedHtmlRenders(ThreadId.make("another-thread"))).toEqual(
+        [],
+      );
+      expect(yield* mcpSessions.takeUnreportedHtmlRenders(threadId)).toEqual([hidden]);
+      expect(yield* mcpSessions.takeUnreportedHtmlRenders(threadId)).toEqual([]);
+      expect(yield* mcpSessions.takeHtmlRender(threadId, page, hidden)).toBe(undefined);
 
       yield* htmlRender.publish({ threadId, ...page });
       yield* mcpSessions.set({
