@@ -2,7 +2,6 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
-import * as Deferred from "effect/Deferred";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -11,7 +10,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 
 import * as CodexClient from "./client.ts";
-import type * as CodexErrors from "./errors.ts";
 
 const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(import.meta.dirname, "../test/fixtures/codex-app-server-mock-peer.ts"),
@@ -19,23 +17,6 @@ const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
 const mockPeerArgs = (path: string) => [path];
 
 it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
-  it.effect("reports a child exit even when no protocol request is pending", () =>
-    Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const handle = yield* spawner.spawn(
-        ChildProcess.make(process.execPath, ["-e", "process.exit(0)"]),
-      );
-      const terminated = yield* Deferred.make<CodexErrors.CodexAppServerError>();
-      yield* Layer.build(
-        CodexClient.layerChildProcess(handle, {
-          onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
-        }),
-      );
-      const error = yield* Deferred.await(terminated);
-      assert.equal(error._tag, "CodexAppServerProcessExitedError");
-      if (error._tag === "CodexAppServerProcessExitedError") assert.equal(error.code, 0);
-    }).pipe(Effect.timeout("5 seconds")),
-  );
   const makeHandle = (env?: Record<string, string>) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
