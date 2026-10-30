@@ -82,6 +82,10 @@ const fixes: ReadonlyArray<{
     commit: "901ffa4af0e70d8d9cad08240973ee4253f13905",
     label: "Check and install OMP provider updates through its native updater",
   },
+  {
+    commit: "f63533fc6d4b4eb396bfa673cf49c6e042aa7dfd",
+    label: "Render native ACP image responses inline from durable local artifacts",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
