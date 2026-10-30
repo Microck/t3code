@@ -86,6 +86,10 @@ const fixes: ReadonlyArray<{
     commit: "f63533fc6d4b4eb396bfa673cf49c6e042aa7dfd",
     label: "Render native ACP image responses inline from durable local artifacts",
   },
+  {
+    commit: "9bd52ed7c35fa173edd63e244264036ff40ae5bf",
+    label: "Show published HTML boards when ACP tool wrappers hide their results",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {

@@ -98,6 +98,8 @@ jobs:
         run: |
           vp test run apps/server/src/provider/AcpRegistryProbe.test.ts
           vp test run packages/provider-acp/src/server/imageContent.test.ts packages/provider-acp/src/server/runtimeModel.test.ts
+          vp test run apps/server/src/htmlRender/HtmlRender.test.ts apps/server/src/orchestration-v2/Adapters/AntigravityAdapterV2.test.ts -t 'publishes the prepared page|html_render'
+          vp test run apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts -t 'OMP wrapper truncates'
           vp test run packages/effect-codex-app-server/src/client.test.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts
           vp test run apps/server/src/orchestration-v2/ProviderSessionManager.test.ts -t 'releases sessions when provider event streams fail'
           vp test run apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts -t 'closes unfinished ACP tools|terminalizes an empty|direct Stop on a deferred|background work when interrupted|quarantine drops late|recovers from .* cancellation|preserves ACP agent tool labels|command description|elicitation'
