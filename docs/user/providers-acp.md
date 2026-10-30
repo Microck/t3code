@@ -51,6 +51,11 @@ version published by the Registry. Their commands are available in a new server 
 sign-in and direct use. Removing an agent's last provider instance removes T3-managed binary files
 but keeps package installs. To use an existing local binary, set **Executable override** explicitly.
 
+## Image responses
+
+Native ACP image responses appear inline in chat. Generated images remain on the server as output
+files after a chat is deleted. PNG, JPEG, GIF, and WebP images up to 10 MiB are supported.
+
 ## Signing in
 
 Open the agent's account section in **Settings → Providers** on web or desktop. Choose
