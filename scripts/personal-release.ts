@@ -14,7 +14,7 @@ const fixes: ReadonlyArray<{
   { pr: 22466, commit: "31eedc68ec4b19eda53ee6727dcef612b6e9de13" },
   { pr: 22842, commit: "095e6983e35b83571c77dd5397dd738183b8b212" },
   // Includes the activation-preference prerequisite needed for one resume after Stop.
-  { pr: 21439, commit: "990fda529b7bed26d37826f031cb2682fc0e6394" },
+  { pr: 21439, commit: "66710506e8f4c710d0a6762a25da4c8fcdae0c49" },
   { pr: 21323, commit: "60250740480898e75cb5cd75630fe38faedd2f4d" },
   { pr: 22698, commit: "4a94f79b205d724d29e75dcebf571180c94bf36e" },
   { pr: 20363, commit: "a6a2b2ae7a4c433d1cba3aaba48ab6a0a70bc296" },
