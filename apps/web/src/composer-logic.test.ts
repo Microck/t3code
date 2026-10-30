@@ -1,12 +1,5 @@
 import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
-import {
-  EnvironmentId,
-  MessageId,
-  ThreadId,
-  ProviderDriverKind,
-  type AssistantCitation,
-  type ServerProviderModel,
-} from "@t3tools/contracts";
+import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
 import {
   collectAssistantCitations,
   expandAssistantCitationsForProvider,
@@ -26,12 +19,10 @@ import {
   composerStateAtPromptEnd,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
+  extendReplacementRangeForTrailingSpace,
   formatAssistantCitationForComposer,
-  isCollapsedCursorAdjacentToInlineToken,
   isPathSuggestionCurrent,
   replaceTextRange,
-  supportsOmpModelMentions,
-  searchComposerMentionModels,
 } from "./composer-logic";
 import { carryDisplacedCustomAnswerIntoPrompt } from "./pendingUserInput";
 import { formatTerminalContextReference } from "./lib/terminalContext";
@@ -55,94 +46,6 @@ const citation: AssistantCitation = {
   suffix: " 後",
 };
 const citationSource = serializeAssistantCitation(citation).replaceAll("+", "%20");
-
-describe("OMP model mentions", () => {
-  const omp = {
-    driver: ProviderDriverKind.make("acpRegistry"),
-    config: {
-      source: "local",
-      commandPath: "/home/ubuntu/.local/bin/omp",
-      commandArgs: ["acp", "--config", "/config/t3.yml"],
-    },
-  };
-
-  it("recognizes the configured ACP executable, independent of the instance label", () => {
-    expect(supportsOmpModelMentions(omp)).toBe(true);
-    expect(supportsOmpModelMentions({ ...omp, displayName: "Renamed agent" })).toBe(true);
-    expect(
-      supportsOmpModelMentions({
-        ...omp,
-        config: { ...omp.config, commandPath: "C:\\tools\\omp.exe" },
-      }),
-    ).toBe(true);
-    expect(supportsOmpModelMentions(undefined)).toBe(false);
-    expect(supportsOmpModelMentions({ ...omp, driver: ProviderDriverKind.make("codex") })).toBe(
-      false,
-    );
-    expect(
-      supportsOmpModelMentions({
-        ...omp,
-        config: { ...omp.config, commandPath: "/bin/other", displayName: "OMP" },
-      }),
-    ).toBe(false);
-    expect(supportsOmpModelMentions({ ...omp, config: { ...omp.config, commandArgs: [] } })).toBe(
-      false,
-    );
-  });
-
-  it.each(["^", "Please delegate to ^", "first\n^openai-codex/gpt", "first\t^gpt"])(
-    "detects a whitespace-delimited model mention in %j",
-    (text) => {
-      expect(detectComposerTrigger(text, text.length, true)).toEqual({
-        kind: "model-mention",
-        query: text.slice(text.lastIndexOf("^") + 1),
-        rangeStart: text.lastIndexOf("^"),
-        rangeEnd: text.length,
-      });
-      expect(detectComposerTrigger(text, text.length)).toBeNull();
-    },
-  );
-
-  it.each(["x^gpt", "(^gpt", "2^3", "^gpt "])(
-    "does not trigger inside another token or after whitespace in %j",
-    (text) => {
-      expect(detectComposerTrigger(text, text.length, true)).toBeNull();
-    },
-  );
-
-  const models: ServerProviderModel[] = [
-    { slug: "openai-codex/gpt-6.1-sol", name: "GPT 6.1 Sol", isCustom: false, capabilities: null },
-    {
-      slug: "maisa-codex/gpt-daybreak-blue-latest",
-      name: "Daybreak Blue",
-      isCustom: false,
-      capabilities: null,
-    },
-    { slug: "default", name: "Default", isCustom: false, capabilities: null },
-  ];
-
-  it("uses qualified catalog IDs verbatim and searches their names and selectors", () => {
-    expect(searchComposerMentionModels(models, "").map((model) => model.slug)).toEqual(
-      models.slice(0, 2).map((model) => model.slug),
-    );
-    expect(searchComposerMentionModels(models, "OPENAI-CODEX/GPT")).toEqual([models[0]]);
-    expect(searchComposerMentionModels(models, "Daybreak Blue")).toEqual([models[1]]);
-    expect(searchComposerMentionModels(models, "nonexistent")).toEqual([]);
-  });
-
-  it("inserts a literal selector in the middle of a prompt and preserves the rest", () => {
-    const text = "Delegate to ^openai and report back";
-    const trigger = detectComposerTrigger(text, text.indexOf(" and"), true)!;
-    const model = searchComposerMentionModels(models, trigger.query)[0]!;
-    const inserted = replaceTextRange(text, trigger.rangeStart, trigger.rangeEnd, `^${model.slug}`);
-    expect(inserted.text).toBe("Delegate to ^openai-codex/gpt-6.1-sol and report back");
-    expect(expandCollapsedComposerCursor(inserted.text, inserted.cursor)).toBe(inserted.cursor);
-    expect(composerStateAtPromptEnd("delegate ^openai", false, true).trigger?.kind).toBe(
-      "model-mention",
-    );
-    expect(composerStateAtPromptEnd("delegate ^openai", true, true).trigger).toBeNull();
-  });
-});
 
 describe("isPathSuggestionCurrent", () => {
   const searchedTarget = {
@@ -362,6 +265,18 @@ describe("detectComposerTrigger", () => {
     expect(trigger).toBeNull();
   });
 
+  it.each([
+    "It costs $5",
+    "budget $9.99",
+    "only $.99",
+    "about €20",
+    "raise $10k",
+    "raise $10k.",
+    "is it $5?",
+  ])("does not detect a skill trigger for the amount in %j", (text) => {
+    expect(detectComposerTrigger(text, text.length)).toBeNull();
+  });
+
   it("detects a pull request number at a token boundary", () => {
     const text = "Compare this with #8737";
 
@@ -579,9 +494,6 @@ describe("assistant citation cursor offsets", () => {
     for (const offset of [1, citationSource.length - 1, citationSource.length]) {
       expect(collapseExpandedComposerCursor(text, prefix.length + offset)).toBe(prefix.length + 1);
     }
-    expect(isCollapsedCursorAdjacentToInlineToken(text, prefix.length, "right")).toBe(true);
-    expect(isCollapsedCursorAdjacentToInlineToken(text, prefix.length + 1, "left")).toBe(true);
-    expect(isCollapsedCursorAdjacentToInlineToken(text, prefix.length + 2, "left")).toBe(false);
   });
 
   it("deletes one collapsed citation without changing its neighbor or surrounding punctuation", () => {
@@ -595,27 +507,6 @@ describe("assistant citation cursor offsets", () => {
 
     expect(result).toEqual({ text: `(),${citationSource}!`, cursor: 1 });
     expect(collapseExpandedComposerCursor(result.text, result.text.length)).toBe("(),□!".length);
-  });
-});
-
-describe("isCollapsedCursorAdjacentToInlineToken", () => {
-  it("detects left adjacency only when cursor is directly after a mention", () => {
-    const text = "open @AGENTS.md next";
-    const mentionStart = "open ".length;
-    const mentionEnd = mentionStart + 1;
-
-    expect(isCollapsedCursorAdjacentToInlineToken(text, mentionEnd, "left")).toBe(true);
-    expect(isCollapsedCursorAdjacentToInlineToken(text, mentionStart, "left")).toBe(false);
-    expect(isCollapsedCursorAdjacentToInlineToken(text, mentionEnd + 1, "left")).toBe(false);
-  });
-
-  it("treats context reference pills as inline tokens for adjacency checks", () => {
-    const text = `open ${terminalReference} next`;
-    const tokenStart = "open ".length;
-    const tokenEnd = tokenStart + 1;
-
-    expect(isCollapsedCursorAdjacentToInlineToken(text, tokenEnd, "left")).toBe(true);
-    expect(isCollapsedCursorAdjacentToInlineToken(text, tokenStart, "right")).toBe(true);
   });
 });
 
@@ -646,5 +537,14 @@ describe("literal editor answer cursor state", () => {
       });
     }
     expect(composerStateAtPromptEnd("Use $my").trigger?.kind).toBe("skill");
+  });
+});
+
+describe("extendReplacementRangeForTrailingSpace", () => {
+  it("swallows one existing space after the range when the replacement ends with one", () => {
+    expect(extendReplacementRangeForTrailingSpace("@fi rest", 3, "@file ")).toBe(4);
+    expect(extendReplacementRangeForTrailingSpace("@firest", 3, "@file ")).toBe(3);
+    expect(extendReplacementRangeForTrailingSpace("@fi rest", 3, "@file")).toBe(3);
+    expect(extendReplacementRangeForTrailingSpace("@fi", 3, "@file ")).toBe(3);
   });
 });

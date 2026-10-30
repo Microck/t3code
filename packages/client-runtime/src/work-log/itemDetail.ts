@@ -1,113 +1,6 @@
 import type { AssetResource, OrchestrationV2TurnItem } from "@t3tools/contracts";
-import { readToolOutputImage, toolOutputImages } from "@t3tools/shared/toolOutput";
+import { toolOutputImageBlocks, toolOutputImages } from "@t3tools/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
-
-// OMP sends task progress inside the ordinary ACP tool result, not as child sessions.
-const OmpAgentProgress = Schema.Struct({
-  id: Schema.String,
-  agent: Schema.String,
-  status: Schema.Literals(["pending", "running", "completed", "failed", "aborted"]),
-  task: Schema.String,
-  assignment: Schema.optionalKey(Schema.String),
-  description: Schema.optionalKey(Schema.String),
-  currentTool: Schema.optionalKey(Schema.String),
-  currentToolArgs: Schema.optionalKey(Schema.String),
-  recentTools: Schema.Array(
-    Schema.Struct({
-      tool: Schema.String,
-      args: Schema.String,
-      endMs: Schema.Number,
-      isError: Schema.optionalKey(Schema.Boolean),
-    }),
-  ),
-  recentOutput: Schema.Array(Schema.String),
-  toolCount: Schema.Number,
-  tokens: Schema.Number,
-  cost: Schema.Number,
-  durationMs: Schema.Number,
-  resolvedModel: Schema.optionalKey(Schema.String),
-  resolvedModelIdentity: Schema.optionalKey(Schema.String),
-  contextTokens: Schema.optionalKey(Schema.Number),
-  contextWindow: Schema.optionalKey(Schema.Number),
-  completionPercent: Schema.optionalKey(
-    Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
-  ),
-  retryState: Schema.optionalKey(
-    Schema.Struct({
-      attempt: Schema.Number,
-      errorMessage: Schema.String,
-    }),
-  ),
-});
-export type OmpAgentProgress = typeof OmpAgentProgress.Type;
-const decodeOmpProgress = Schema.decodeUnknownOption(Schema.Array(OmpAgentProgress));
-
-const OmpWaitJob = Schema.Struct({
-  id: Schema.String,
-  type: Schema.Literals(["task", "bash", "eval"]),
-  status: Schema.Literals(["running", "completed", "failed", "cancelled"]),
-  label: Schema.String,
-  durationMs: Schema.Number,
-  resolvedModel: Schema.optionalKey(Schema.String),
-  resolvedModelIdentity: Schema.optionalKey(Schema.String),
-  resolvedThinkingLevel: Schema.optionalKey(Schema.String),
-  completionPercent: Schema.optionalKey(
-    Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
-  ),
-  exitCode: Schema.optionalKey(Schema.Number),
-  resultText: Schema.optionalKey(Schema.String),
-  errorText: Schema.optionalKey(Schema.String),
-});
-type OmpWaitJob = typeof OmpWaitJob.Type;
-const decodeOmpWait = Schema.decodeUnknownOption(
-  Schema.Struct({ op: Schema.Literal("wait"), jobs: Schema.Array(OmpWaitJob) }),
-);
-
-export type OmpTaskProgress = (
-  | { readonly kind: "progress"; readonly agents: ReadonlyArray<OmpAgentProgress> }
-  | { readonly kind: "jobs"; readonly jobs: ReadonlyArray<OmpWaitJob> }
-) & { readonly text: string | null };
-
-export function readOmpTaskProgress(output: unknown): OmpTaskProgress | null {
-  if (!isRecord(output) || !isRecord(output.details)) return null;
-  const agents = Option.getOrNull(decodeOmpProgress(output.details.progress));
-  if (agents?.length) return { kind: "progress", agents, text: formatToolValue(output.content) };
-  // Wait snapshots are a different native contract, not incomplete task progress.
-  const wait = Option.getOrNull(decodeOmpWait(output.details));
-  return wait?.jobs.length
-    ? { kind: "jobs", jobs: wait.jobs, text: formatToolValue(output.content) }
-    : null;
-}
-
-const compactCount = new Intl.NumberFormat("en-US", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-
-export function ompAgentMetrics(agent: OmpAgentProgress): string {
-  return [
-    `${agent.toolCount} tools`,
-    `${compactCount.format(agent.tokens)} tokens`,
-    ...(agent.contextTokens === undefined
-      ? []
-      : [
-          `context ${compactCount.format(agent.contextTokens)}${agent.contextWindow === undefined ? "" : ` / ${compactCount.format(agent.contextWindow)}`}`,
-        ]),
-    `$${agent.cost.toFixed(4)}`,
-    `${Math.floor(agent.durationMs / 1000)}s`,
-  ].join(" · ");
-}
-
-export function ompAgentStatus(
-  agent: Pick<OmpAgentProgress, "status" | "retryState" | "completionPercent"> | OmpWaitJob,
-): string {
-  if ("retryState" in agent && agent.retryState) return `Retrying (${agent.retryState.attempt})`;
-  if (agent.status === "running" && agent.completionPercent !== undefined)
-    return `running · ~${Math.round(agent.completionPercent)}%`;
-  return agent.status === "aborted" ? "Stopped" : agent.status;
-}
 
 const MAX_TEXT_BLOCK_DEPTH = 4;
 
@@ -119,18 +12,22 @@ function isSummarizedValue(value: unknown): boolean {
   return isRecord(value) && value.truncated === true && typeof value.summary === "string";
 }
 
-function textFromBlocks(value: unknown, depth: number): string | null {
+function textFromBlocks(
+  value: unknown,
+  depth: number,
+  imageBlocks: ReadonlyArray<unknown>,
+): string | null {
   if (depth > MAX_TEXT_BLOCK_DEPTH) return null;
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
-    const parts = value.map((block) => textFromBlocks(block, depth + 1));
+    const parts = value.map((block) => textFromBlocks(block, depth + 1, imageBlocks));
     return parts.every((part) => part !== null)
       ? parts.filter((part) => part !== "").join("\n")
       : null;
   }
   if (!isRecord(value)) return null;
   if (value.type === "text" && typeof value.text === "string") return value.text;
-  if (value.type === "image") return readToolOutputImage(value) ? "" : "[image]";
+  if (value.type === "image") return imageBlocks.includes(value) ? "" : "[image]";
   if (value.type === "resource_link" && typeof value.uri === "string") return value.uri;
   if (value.type === "resource" && isRecord(value.resource)) {
     const resource = value.resource;
@@ -138,9 +35,10 @@ function textFromBlocks(value: unknown, depth: number): string | null {
     if (typeof resource.uri === "string") return resource.uri;
   }
   const keys = Object.keys(value).filter((key) => key !== "isError" && key !== "is_error");
-  if (keys.length === 1 && keys[0] === "content") return textFromBlocks(value.content, depth + 1);
+  if (keys.length === 1 && keys[0] === "content")
+    return textFromBlocks(value.content, depth + 1, imageBlocks);
   if (keys.length === 2 && keys.includes("content") && keys.includes("structuredContent")) {
-    const text = textFromBlocks(value.content, depth + 1);
+    const text = textFromBlocks(value.content, depth + 1, imageBlocks);
     return text?.trim() ? text : null;
   }
   return null;
@@ -168,7 +66,7 @@ function prettyJsonText(text: string): string {
 function formatToolValue(value: unknown, hasImagePreview = false): string | null {
   if (value === undefined || value === null) return null;
   if (hasImagePreview && isRecord(value) && value.type === "image") return null;
-  const text = textFromBlocks(value, 0);
+  const text = textFromBlocks(value, 0, toolOutputImageBlocks(value));
   if (text !== null) return text.trim() ? prettyJsonText(text) : null;
   let json: string | undefined;
   try {
@@ -332,11 +230,7 @@ export function turnItemHasDetail(item: OrchestrationV2TurnItem): boolean {
     case "web_search":
       return (item.results?.length ?? 0) > 0 || (item.patterns?.length ?? 0) > 0;
     case "dynamic_tool":
-      return (
-        item.outputOmitted === true ||
-        item.output != null ||
-        toolCallHasLines(toolCallLines({ args: item.input }))
-      );
+      return item.outputOmitted === true || toolCallHasLines(toolCallLines({ args: item.input }));
     case "approval_request":
       return Boolean(item.prompt?.trim());
     case "user_input_request":

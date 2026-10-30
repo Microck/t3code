@@ -10,18 +10,6 @@ import {
 import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { createModelCapabilities } from "@t3tools/shared/model";
-import * as HttpClient from "effect/http/HttpClient";
-import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
-import { enrichProviderSnapshotWithVersionAdvisory } from "@t3tools/provider-core/server/maintenanceResolver";
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import { isOmpAcpCommand } from "./omp-acp.ts";
-import { ompMaintenance, parseOmpVersion } from "./omp-maintenance.ts";
-import {
-  makeCachedProviderMaintenanceResolution,
-  resolveProviderMaintenanceCapabilitiesEffect,
-  runProbe,
-} from "@t3tools/provider-core/server/maintenanceResolver";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -71,10 +59,7 @@ import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
-// How long a successful discovery probe stays valid. Periodic health
-// refreshes reuse it instead of spawning a fresh disposable ACP session;
-// failed or unauthenticated probes are never cached so a completed sign-in
-// is detected on the next refresh.
+// Cache only successful authenticated probes so sign-in changes remain visible.
 const PROBE_SUCCESS_TTL_MS = 15 * 60 * 1_000;
 const EMPTY_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
@@ -221,9 +206,6 @@ function baseSnapshot(
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     ...(iconUrl ? { iconUrl } : {}),
     continuation: { groupKey: input.continuationKey },
-    // The registry driver rejects every application text-generation operation,
-    // so selectors must not offer these instances for commit, PR, branch, or
-    // title generation.
     supportsTextGeneration: false,
     enabled: input.settings.enabled,
     installed: input.installed,
@@ -348,9 +330,7 @@ export function buildCheckedAcpRegistrySnapshot(
       : {}),
     installed: readiness.installed,
     version: readiness.version,
-    // A failed discovery probe on a ready installation is a warning, not an
-    // outage: the agent binary is present and a real turn may still work
-    // (for example after the user completes authentication).
+    // Failed discovery is a warning: an installed agent may still run real turns.
     status: probeFailed ? "warning" : readiness.status,
     auth: input.probe
       ? {
@@ -465,11 +445,7 @@ export const checkAcpRegistryProviderReadiness = Effect.fn(
     : snapshot;
 });
 
-export type AcpRegistryDriverEnv =
-  | AcpRegistryAdapterV2DriverEnv
-  | ProviderHost.ProviderHost
-  | HttpClient.HttpClient
-  | ProviderLatestVersions.ProviderLatestVersions;
+export type AcpRegistryDriverEnv = AcpRegistryAdapterV2DriverEnv | ProviderHost.ProviderHost;
 
 export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryDriverEnv> = {
   driverKind: DRIVER_KIND,
@@ -494,15 +470,11 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     );
     if (Option.isSome(runtimeCoordinator)) {
       yield* runtimeCoordinator.value.clearAvailableCommands(instanceId);
-      yield* runtimeCoordinator.value.clearLiveConfiguration(instanceId, "driver-created");
+      yield* runtimeCoordinator.value.clearLiveConfiguration(instanceId);
       yield* Effect.addFinalizer(() =>
         runtimeCoordinator.value
           .clearAvailableCommands(instanceId)
-          .pipe(
-            Effect.andThen(
-              runtimeCoordinator.value.clearLiveConfiguration(instanceId, "driver-disposed"),
-            ),
-          ),
+          .pipe(Effect.andThen(runtimeCoordinator.value.clearLiveConfiguration(instanceId))),
       );
     }
     const crypto = yield* Crypto.Crypto;
@@ -542,35 +514,6 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           }),
       ),
     );
-    const advisoryServices = yield* Effect.context<
-      HttpClient.HttpClient | ProviderLatestVersions.ProviderLatestVersions
-    >();
-    const maintenanceServices = yield* Effect.context<
-      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-    >();
-    const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-      isOmpAcpCommand(effectiveConfig)
-        ? resolveProviderMaintenanceCapabilitiesEffect(ompMaintenance(host.paths.cwd), {
-            binaryPath: effectiveConfig.commandPath,
-            env: processEnvironment,
-          }).pipe(Effect.provideContext(maintenanceServices))
-        : Effect.succeed(MAINTENANCE),
-    );
-    const withInstalledVersion = Effect.fn("AcpRegistryDriver.withInstalledVersion")(function* (
-      provider: ServerProvider,
-    ) {
-      if (!provider.installed || !isOmpAcpCommand(effectiveConfig)) return provider;
-      const maintenance = yield* resolveMaintenance();
-      if (!maintenance.update) return provider;
-      const output = yield* runProbe(
-        maintenance.update.executable,
-        ["--version"],
-        maintenance.update.env ?? processEnvironment,
-        [0],
-        host.paths.cwd,
-      ).pipe(Effect.provideContext(maintenanceServices));
-      return { ...provider, version: output === null ? null : parseOmpVersion(output) };
-    });
     const readinessInput = {
       ...identity,
       settings: effectiveConfig,
@@ -619,7 +562,6 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     });
     const checkProvider = checkAcpRegistryProviderReadiness(readinessInput).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
-      Effect.flatMap(withInstalledVersion),
       Effect.flatMap(withLiveRuntimeState),
     );
     const enrichProvider = checkAcpRegistryProviderStatus(
@@ -632,7 +574,6 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(Crypto.Crypto, crypto),
-      Effect.flatMap(withInstalledVersion),
     );
     const enrichmentCache = yield* Ref.make<{
       readonly generation: number;
@@ -682,22 +623,17 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     const snapshot = yield* makeManagedServerProvider<
       ProviderSnapshotSettings<AcpRegistrySettings>
     >({
-      resolveMaintenance,
+      resolveMaintenance: () => Effect.succeed(MAINTENANCE),
       getSettings: snapshotSettings.getSettings,
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: () => checkProvider,
       checkProvider,
-      enrichSnapshot: ({ settings, snapshot, getSnapshot, publishSnapshot }) => {
-        const withVersionAdvisory = (provider: ServerProvider) =>
-          resolveMaintenance().pipe(
-            Effect.flatMap((capabilities) =>
-              enrichProviderSnapshotWithVersionAdvisory(provider, capabilities, {
-                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-              }),
-            ),
-            Effect.provideContext(advisoryServices),
-          );
+      enrichSnapshot: Effect.fn("enrichSnapshot")(function ({
+        snapshot,
+        getSnapshot,
+        publishSnapshot,
+      }) {
         if (!snapshot.installed) return Effect.void;
         const publishEnrichment = (
           Option.isSome(runtimeCoordinator)
@@ -707,7 +643,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                   : effectiveConfig.agentId,
                 enrichProviderCached(snapshot),
               )
-            : enrichProviderCached(snapshot).pipe(Effect.map(Option.some))
+            : enrichProviderCached(snapshot).pipe(Effect.asSome)
         ).pipe(
           Effect.flatMap(
             Option.match({
@@ -717,10 +653,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                   Ref.get(enrichmentCache).pipe(
                     Effect.flatMap((current) =>
                       current.generation === generation
-                        ? withLiveRuntimeState(provider).pipe(
-                            Effect.flatMap(withVersionAdvisory),
-                            Effect.flatMap(publishSnapshot),
-                          )
+                        ? withLiveRuntimeState(provider).pipe(Effect.flatMap(publishSnapshot))
                         : Effect.void,
                     ),
                   ),
@@ -782,7 +715,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             discard: true,
           },
         );
-      },
+      }),
     }).pipe(
       Effect.mapError(
         (cause) =>
@@ -821,7 +754,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
 
     const clearLiveState = Option.isSome(runtimeCoordinator)
       ? runtimeCoordinator.value
-          .clearLiveConfiguration(instanceId, "authentication-invalidated")
+          .clearLiveConfiguration(instanceId)
           .pipe(Effect.andThen(runtimeCoordinator.value.clearAvailableCommands(instanceId)))
       : Effect.void;
     const controller = yield* AcpRegistryAuth.makeAcpRegistryAuth({
@@ -940,7 +873,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                       ? Effect.all(
                           [
                             runtimeCoordinator.value.clearAvailableCommands(instanceId),
-                            runtimeCoordinator.value.clearLiveConfiguration(instanceId, "logout"),
+                            runtimeCoordinator.value.clearLiveConfiguration(instanceId),
                           ],
                           { concurrency: "unbounded", discard: true },
                         )

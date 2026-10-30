@@ -194,10 +194,7 @@ function extractPrimaryPath(data: Record<string, unknown> | undefined): string |
   return collectToolFilePaths(data)[0];
 }
 
-/**
- * Later ACP updates often resend `rawInput: {}`. Keep the first object that
- * actually carried keys so a parsed path is not wiped out.
- */
+/** Preserve the first nonempty rawInput; later ACP updates often resend an empty object. */
 export function mergeToolActivityData(
   previous: unknown,
   next: unknown,
@@ -408,23 +405,6 @@ export interface ToolActivityPresentation {
   readonly detail?: string | undefined;
 }
 
-const CATEGORY_TOOL_TITLES = new Set([
-  "terminal",
-  "command",
-  "run command",
-  "ran command",
-  "shell",
-  "read",
-  "read file",
-  "reading file",
-  "tool",
-  "tool call",
-]);
-
-function descriptiveToolTitle(title: string | undefined): string | undefined {
-  return title && !CATEGORY_TOOL_TITLES.has(title.toLowerCase()) ? title : undefined;
-}
-
 export function deriveToolActivityPresentation(
   input: ToolActivityPresentationInput,
 ): ToolActivityPresentation {
@@ -440,13 +420,10 @@ export function deriveToolActivityPresentation(
     data,
   });
 
-  const descriptiveTitle = descriptiveToolTitle(title);
-
   if (action === "command") {
-    const commandDetail = command ?? descriptiveTitle;
     return {
       summary: "Ran command",
-      ...(commandDetail ? { detail: commandDetail } : {}),
+      ...(command ? { detail: command } : {}),
     };
   }
 
@@ -456,7 +433,9 @@ export function deriveToolActivityPresentation(
         summary: formatReadToolLabel(primaryPath),
       };
     }
-    return { summary: descriptiveTitle ?? "Read file" };
+    return {
+      summary: "Read file",
+    };
   }
 
   if (action === "file_change") {

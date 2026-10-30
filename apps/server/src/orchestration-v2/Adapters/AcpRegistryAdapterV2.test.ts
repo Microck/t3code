@@ -14,11 +14,9 @@ import {
 import { pendingBackgroundTurnItems } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as Exit from "effect/Exit";
-import * as TestClock from "effect/testing/TestClock";
 import * as Fiber from "effect/Fiber";
 import * as DateTime from "effect/DateTime";
 import * as Queue from "effect/Queue";
-import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -217,8 +215,6 @@ const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(function* (
     },
     ACP_REGISTRY_PROVIDER,
   );
-  const promptRequests: Array<unknown> = [];
-  const promptStarted = yield* Queue.unbounded<void>();
   const offers: Array<ProviderContinuationRequest> = [];
   const offered = yield* Queue.unbounded<void>();
   const continuationRequests = {
@@ -249,22 +245,7 @@ const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(function* (
     ...(continuationEnabled ? { continuationRequests } : {}),
     makeRuntime: (runtimeInput: Parameters<typeof replayRuntime>[0]) => {
       onTermination = runtimeInput.onTermination;
-      return replayRuntime({
-        ...runtimeInput,
-        requestLogger: (event) =>
-          Effect.sync(() => {
-            if (event.method === "session/prompt" && event.status === "started") {
-              promptRequests.push(event.payload);
-            }
-          }).pipe(
-            Effect.andThen(
-              event.method === "session/prompt" && event.status === "started"
-                ? Queue.offer(promptStarted, undefined)
-                : Effect.void,
-            ),
-            Effect.andThen(runtimeInput.requestLogger?.(event) ?? Effect.void),
-          ),
-      });
+      return replayRuntime(runtimeInput);
     },
   };
   const adapter = yield* makeAcpRegistryAdapterV2(adapterOptions).pipe(
@@ -367,8 +348,6 @@ const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(function* (
   );
   return {
     runtime,
-    promptRequests,
-    promptStarted,
     providerThread,
     turnInput,
     until,
@@ -432,379 +411,7 @@ const claudeUnrelatedChildren = [
   }),
 ];
 
-const busyPromptError =
-  "Agent is already processing. Use steer() or followUp() to queue messages, or wait for completion.";
-
-const busyPromptRequest = {
-  type: "expect_outbound",
-  frame: {
-    kind: "request",
-    method: "session/prompt",
-    params: {
-      sessionId: CLAUDE_ROOT_SESSION,
-      prompt: [
-        { type: "text", text: "<any>нажал<any>" },
-        { type: "text", text: "<any>" },
-      ],
-    },
-  },
-};
-
-const openBusyReplaySession = (
-  options: {
-    readonly rejections?: number;
-    readonly errorMessage?: string;
-    readonly errorCode?: number;
-    readonly cancel?: boolean;
-    readonly cancelInFlight?: boolean;
-    readonly oldOutputGate?: ProviderReplayGate;
-  } = {},
-) =>
-  openClaudeReplaySession(
-    [
-      {
-        type: "expect_outbound",
-        frame: { kind: "request", method: "initialize", params: "<any>" },
-      },
-      {
-        type: "emit_inbound",
-        frame: {
-          kind: "response",
-          method: "initialize",
-          result: {
-            protocolVersion: 1,
-            agentInfo: { name: "issue-22660-fake-busy-agent", version: "1.0.0" },
-            agentCapabilities: {},
-            authMethods: [],
-          },
-        },
-      },
-      {
-        type: "expect_outbound",
-        frame: { kind: "request", method: "session/new", params: "<any>" },
-      },
-      {
-        type: "emit_inbound",
-        frame: {
-          kind: "response",
-          method: "session/new",
-          result: { sessionId: CLAUDE_ROOT_SESSION },
-        },
-      },
-      {
-        type: "expect_outbound",
-        frame: { kind: "request", method: "session/prompt", params: "<any>" },
-      },
-      claudeFrames.update(CLAUDE_ROOT_SESSION, {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Press the key once more, waiting up to 4 minutes." },
-      }),
-      {
-        type: "emit_inbound",
-        frame: {
-          kind: "response",
-          method: "session/prompt",
-          result: { stopReason: "end_turn" },
-        },
-      },
-      ...Array.from({ length: options.rejections ?? 1 }, () => [
-        busyPromptRequest,
-        {
-          type: "emit_inbound",
-          frame: {
-            kind: "response",
-            method: "session/prompt",
-            error: {
-              code: options.errorCode ?? -32603,
-              message: options.errorMessage ?? busyPromptError,
-            },
-          },
-        },
-      ]).flat(),
-      ...(options.oldOutputGate
-        ? [
-            {
-              ...claudeFrames.update(CLAUDE_ROOT_SESSION, {
-                sessionUpdate: "agent_thought_chunk",
-                content: { type: "text", text: "Previous background work is still running." },
-              }),
-              label: "old-output",
-            },
-          ]
-        : []),
-      ...(options.cancelInFlight
-        ? [
-            busyPromptRequest,
-            {
-              type: "expect_outbound",
-              frame: {
-                kind: "notification",
-                method: "session/cancel",
-                params: { sessionId: CLAUDE_ROOT_SESSION },
-              },
-            },
-            {
-              type: "emit_inbound",
-              frame: {
-                kind: "response",
-                method: "session/prompt",
-                error: { code: -32603, message: busyPromptError },
-              },
-            },
-          ]
-        : options.cancel
-          ? [
-              {
-                type: "expect_outbound",
-                frame: {
-                  kind: "notification",
-                  method: "session/cancel",
-                  params: { sessionId: CLAUDE_ROOT_SESSION },
-                },
-              },
-            ]
-          : options.errorMessage !== undefined
-            ? []
-            : [
-                busyPromptRequest,
-                claudeFrames.update(CLAUDE_ROOT_SESSION, {
-                  sessionUpdate: "agent_message_chunk",
-                  content: { type: "text", text: "Received your confirmation." },
-                }),
-                {
-                  type: "emit_inbound",
-                  frame: {
-                    kind: "response",
-                    method: "session/prompt",
-                    result: { stopReason: "end_turn" },
-                  },
-                },
-              ]),
-    ],
-    options.oldOutputGate,
-    false,
-  );
-
-const startBusyReplayTurn = Effect.fn("startBusyReplayTurn")(function* (
-  session: Effect.Success<ReturnType<typeof openBusyReplaySession>>,
-) {
-  yield* session.runtime.startTurn(session.turnInput(1));
-  assert.equal((yield* session.terminal).status, "completed");
-  const next = session.turnInput(2);
-  yield* session.runtime.startTurn({ ...next, message: { ...next.message, text: "нажал" } });
-});
-
-const nextBusyRetry = (session: Effect.Success<ReturnType<typeof openBusyReplaySession>>) =>
-  session.until(
-    (event) =>
-      event.type === "turn_item.updated" &&
-      event.turnItem.type === "error" &&
-      event.turnItem.status === "running",
-  );
-
 describe("AcpRegistryAdapterV2", () => {
-  it.effect.each([-32603, -32003])(
-    "queues a busy prompt with code %s after the preceding turn completes",
-    (errorCode) =>
-      Effect.gen(function* () {
-        const session = yield* openBusyReplaySession({ errorCode });
-        yield* startBusyReplayTurn(session);
-        const queued = yield* session.until(
-          (event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.type === "error" &&
-            event.turnItem.retry !== undefined,
-        );
-        const retryItem = queued.at(-1)!;
-        assert.equal(retryItem.type, "turn_item.updated");
-        if (retryItem.type !== "turn_item.updated" || retryItem.turnItem.type !== "error")
-          throw new Error("Missing queue state");
-        assert.equal(retryItem.turnItem.status, "running");
-        assert.include(retryItem.turnItem.failure?.message ?? "", "queued");
-        assert.deepEqual(retryItem.turnItem.retry, {
-          attempt: 1,
-          maxAttempts: null,
-          retryDelayMs: 1_000,
-        });
-        assert.isFalse(queued.some((event) => event.type === "turn.terminal"));
-        yield* TestClock.adjust("1 second");
-        const events = yield* session.until((event) => event.type === "turn.terminal");
-        assert.isTrue(
-          events.some(
-            (event) =>
-              event.type === "turn_item.updated" &&
-              event.turnItem.type === "error" &&
-              event.turnItem.retry !== undefined &&
-              event.turnItem.status === "completed",
-          ),
-        );
-        const second = events.at(-1)!;
-        assert.equal(second.type, "turn.terminal");
-        if (second.type !== "turn.terminal") throw new Error("Missing terminal");
-        assert.equal(second.status, "completed");
-        assert.isNull(second.failure);
-        assert.equal(second.runOrdinal, 2);
-        assert.equal(second.threadDisposition, "reusable");
-        assert.equal(session.promptRequests.length, 3);
-        assert.deepEqual(session.promptRequests[1], session.promptRequests[2]);
-        assert.isTrue(
-          events.some(
-            (event) =>
-              event.type === "message.updated" &&
-              event.message.text === "Received your confirmation.",
-          ),
-          "the queued prompt must reach the agent and publish its reply",
-        );
-      }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
-  it.effect.each([-32603, -32003])(
-    "stops a queued busy prompt with code %s without resubmitting it",
-    (errorCode) =>
-      Effect.gen(function* () {
-        const session = yield* openBusyReplaySession({ cancel: true, errorCode });
-        yield* startBusyReplayTurn(session);
-        const queued = yield* nextBusyRetry(session);
-        const started = queued.find((event) => event.type === "provider_turn.updated");
-        if (started?.type !== "provider_turn.updated") throw new Error("Missing provider turn");
-        const interrupt = yield* session.runtime
-          .interruptTurn({
-            providerThread: session.providerThread,
-            providerTurnId: started.providerTurn.id,
-          })
-          .pipe(Effect.forkScoped);
-        const terminal = yield* session.terminal;
-        yield* Fiber.join(interrupt);
-        assert.equal(terminal.status, "interrupted");
-        assert.isNull(terminal.failure);
-        // Advance past every backoff: a stopped prompt must never be dispatched again.
-        yield* TestClock.adjust("2 minutes");
-        assert.equal(session.promptRequests.length, 2);
-      }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
-  it.effect("keeps the prompt queued through multi-minute background work", () =>
-    Effect.gen(function* () {
-      const session = yield* openBusyReplaySession({ rejections: 12 });
-      yield* startBusyReplayTurn(session);
-      for (const delay of [
-        1_000,
-        2_000,
-        4_000,
-        8_000,
-        16_000,
-        ...Array.from({ length: 7 }, () => 30_000),
-      ]) {
-        const queued = yield* nextBusyRetry(session);
-        assert.isFalse(queued.some((event) => event.type === "turn.terminal"));
-        const notice = queued.at(-1)!;
-        if (notice.type !== "turn_item.updated" || notice.turnItem.type !== "error")
-          throw new Error("Missing queue notice");
-        assert.equal(notice.turnItem.retry?.retryDelayMs, delay);
-        assert.isNull(notice.turnItem.retry?.maxAttempts);
-        yield* TestClock.adjust(delay);
-      }
-      const terminal = yield* session.terminal;
-      assert.equal(terminal.status, "completed");
-      assert.isNull(terminal.failure);
-      assert.equal(session.promptRequests.length, 14);
-      for (const payload of session.promptRequests.slice(2)) {
-        assert.deepEqual(payload, session.promptRequests[1]);
-      }
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
-  it.effect("does not resubmit when Stop lands during an in-flight busy retry", () =>
-    Effect.gen(function* () {
-      const session = yield* openBusyReplaySession({ cancelInFlight: true });
-      yield* startBusyReplayTurn(session);
-      const queued = yield* nextBusyRetry(session);
-      const started = queued.find((event) => event.type === "provider_turn.updated");
-      if (started?.type !== "provider_turn.updated") throw new Error("Missing provider turn");
-      yield* TestClock.adjust("1 second");
-      // The third dispatch is held until the replay receives session/cancel.
-      for (let i = 0; i < 3; i++) yield* Queue.take(session.promptStarted);
-      const interrupt = yield* session.runtime
-        .interruptTurn({
-          providerThread: session.providerThread,
-          providerTurnId: started.providerTurn.id,
-        })
-        .pipe(Effect.forkScoped);
-      const terminal = yield* session.terminal;
-      yield* Fiber.join(interrupt);
-      assert.equal(terminal.status, "interrupted");
-      assert.isNull(terminal.failure);
-      yield* TestClock.adjust("5 minutes");
-      assert.equal(session.promptRequests.length, 3);
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
-  it.effect("keeps the queue notice running while old root output arrives", () =>
-    Effect.gen(function* () {
-      const gate = makeProviderReplayGate(["old-output"]);
-      yield* Effect.addFinalizer(() => Effect.sync(() => gate.releaseAll()));
-      const session = yield* openBusyReplaySession({ oldOutputGate: gate });
-      yield* startBusyReplayTurn(session);
-      yield* nextBusyRetry(session);
-      gate.release("old-output");
-      const oldOutput = yield* session.until(
-        (event) =>
-          event.type === "turn_item.updated" &&
-          event.turnItem.type === "reasoning" &&
-          event.turnItem.text === "Previous background work is still running.",
-      );
-      assert.isFalse(
-        oldOutput.some(
-          (event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.type === "error" &&
-            event.turnItem.status === "completed",
-        ),
-      );
-      assert.equal(session.promptRequests.length, 2);
-      yield* TestClock.adjust("1 second");
-      const delivered = yield* session.until((event) => event.type === "turn.terminal");
-      assert.isTrue(
-        delivered.some(
-          (event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.type === "error" &&
-            event.turnItem.status === "completed",
-        ),
-      );
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
-  it.effect.each([
-    { name: "unrelated internal error", errorCode: -32603, errorMessage: "Another internal error" },
-    { name: "unrelated OMP server error", errorCode: -32003, errorMessage: "Another server error" },
-    {
-      name: "busy message with a different code",
-      errorCode: -32602,
-      errorMessage: busyPromptError,
-    },
-    { name: "near-match busy message", errorCode: -32603, errorMessage: `${busyPromptError} ` },
-  ])("does not retry $name", ({ errorCode, errorMessage }) =>
-    Effect.gen(function* () {
-      const session = yield* openBusyReplaySession({ errorCode, errorMessage });
-      yield* startBusyReplayTurn(session);
-      const events = yield* session.until((event) => event.type === "turn.terminal");
-      const terminal = events.at(-1)!;
-      if (terminal.type !== "turn.terminal") throw new Error("Missing terminal");
-      assert.equal(terminal.status, "failed");
-      assert.equal(terminal.failure?.message, errorMessage.trim());
-      assert.equal(session.promptRequests.length, 2);
-      assert.isFalse(
-        events.some(
-          (event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.type === "error" &&
-            event.turnItem.retry !== undefined,
-        ),
-      );
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
   it("preserves and sanitizes structured ACP errors without exposing arbitrary defects", () => {
     const limit = new EffectAcpErrors.AcpRequestError({
       code: -31001,
@@ -834,110 +441,6 @@ describe("AcpRegistryAdapterV2", () => {
   });
 
   describe("the agent's own pickers", () => {
-    it.effect(
-      "does not replace a discovered catalog with a failed session's startup metadata",
-      () =>
-        Effect.gen(function* () {
-          const fileSystem = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-          const coordinator = yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
-          const replayDir = yield* fileSystem.makeTempDirectoryScoped({
-            prefix: "t3-catalog-startup-",
-          });
-          const instanceId = ProviderInstanceId.make("catalog-startup");
-          const discovered: AcpRegistryLiveConfiguration = {
-            models: [{ id: "gpt-test", name: "GPT Test", description: null }],
-            currentModelId: "gpt-test",
-            configOptions: [],
-          };
-          yield* coordinator.publishLiveConfiguration(instanceId, discovered);
-          const transcript = yield* decodeAcpReplayTranscript(
-            {
-              provider: ACP_REGISTRY_PROVIDER,
-              protocol: "acp.ndjson-jsonrpc",
-              version: "1",
-              scenario: "catalog-startup",
-              entries: [
-                {
-                  type: "expect_outbound",
-                  frame: { kind: "request", method: "initialize", params: "<any>" },
-                },
-                {
-                  type: "emit_inbound",
-                  frame: {
-                    kind: "response",
-                    method: "initialize",
-                    result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },
-                  },
-                },
-                {
-                  type: "expect_outbound",
-                  frame: { kind: "request", method: "session/new", params: "<any>" },
-                },
-                {
-                  type: "emit_inbound",
-                  frame: {
-                    kind: "notification",
-                    method: "session/update",
-                    params: {
-                      sessionId: "starting-session",
-                      update: { sessionUpdate: "current_mode_update", currentModeId: "auto" },
-                    },
-                  },
-                },
-                {
-                  type: "emit_inbound",
-                  frame: {
-                    kind: "response",
-                    method: "session/new",
-                    error: { code: -32603, message: "Session startup failed" },
-                  },
-                },
-              ] as never,
-            },
-            ACP_REGISTRY_PROVIDER,
-          );
-          const adapter = yield* makeAcpRegistryAdapterV2({
-            selfInvocation: yield* resolveSelfInvocation(),
-            instanceId,
-            settings: yield* decodeAcpRegistryAdapterSettings({
-              source: "local",
-              commandPath: "omp",
-            }),
-            environment: {},
-            makeRuntime: makeAcpReplayRuntime({
-              transcript,
-              statusPath: path.join(replayDir, "status.json"),
-              scriptPath: yield* path.fromFileUrl(
-                new URL("../../../scripts/acp-replay-agent.ts", import.meta.url),
-              ),
-              childProcessSpawner,
-              fileSystem,
-            }),
-          });
-          yield* adapter
-            .openSession({
-              threadId: ThreadId.make("catalog-startup-thread"),
-              providerSessionId: ProviderSessionId.make("catalog-startup-session"),
-              modelSelection: { instanceId, model: "default" },
-              runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-                runtimeMode: "full-access",
-                interactionMode: "default",
-                cwd: replayDir,
-              }),
-            })
-            .pipe(Effect.flip);
-          assert.deepEqual(
-            Option.getOrUndefined(yield* coordinator.getLiveConfiguration(instanceId)),
-            discovered,
-          );
-        }).pipe(
-          Effect.provide(AcpRegistrySupport.layerFromHost.pipe(Layer.provideMerge(layerTest))),
-          Effect.scoped,
-        ),
-    );
-
     type Frame = Record<string, unknown>;
     const outbound = (method: string, params: unknown = "<any>"): Frame => ({
       type: "expect_outbound",
@@ -1501,6 +1004,42 @@ describe("AcpRegistryAdapterV2", () => {
       const terminal = completed.at(-1)!;
       if (terminal.type !== "turn.terminal") throw new Error("Missing fallback terminal");
       assert.equal(terminal.status, "completed");
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  // regression: #26695 cancelling a Copilot prompt kills its background agents
+  it.effect("never steers Copilot by cancelling its prompt", () =>
+    Effect.gen(function* () {
+      const steering = Effect.fn("steering")(function* (config: Record<string, unknown>) {
+        const instanceId = ProviderInstanceId.make("acp-registry-steering");
+        const adapter = yield* makeAcpRegistryAdapterV2({
+          selfInvocation: yield* resolveSelfInvocation(),
+          instanceId,
+          settings: yield* decodeAcpRegistryAdapterSettings(config),
+          environment: {},
+        }).pipe(Effect.provide(layerInjectedRuntimeCatalog));
+        const { turns } = yield* adapter.getCapabilities();
+        return {
+          supportsInterrupt: turns.supportsInterrupt,
+          supportsActiveSteering: turns.supportsActiveSteering,
+          supportsSteeringByInterruptRestart: turns.supportsSteeringByInterruptRestart,
+        };
+      });
+      const copilot = {
+        supportsInterrupt: true,
+        supportsActiveSteering: false,
+        supportsSteeringByInterruptRestart: false,
+      };
+
+      assert.deepEqual(yield* steering({ agentId: "github-copilot-cli" }), copilot);
+      assert.deepEqual(
+        yield* steering({ source: "local", commandPath: "C:\\tools\\copilot.cmd" }),
+        copilot,
+      );
+      assert.deepEqual(yield* steering({ agentId: "gemini" }), {
+        ...copilot,
+        supportsSteeringByInterruptRestart: true,
+      });
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

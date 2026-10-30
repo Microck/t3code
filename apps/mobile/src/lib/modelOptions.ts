@@ -1,10 +1,9 @@
 import {
-  isOmpProvider,
   normalizeProviderAccentColor,
   resolveProviderInstanceDisplayName,
   shouldShowInstanceBadge,
 } from "@t3tools/client-runtime/state/provider-instance-display";
-import type { MenuAction } from "@react-native-menu/menu";
+
 import type {
   ModelCapabilities,
   ModelSelection,
@@ -12,16 +11,17 @@ import type {
   RuntimeMode,
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
-import { resolveProjectProviderInstanceEnabled } from "@t3tools/contracts";
+import { isProviderDriverKind, resolveProjectProviderInstanceEnabled } from "@t3tools/contracts";
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
+import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
 
 export type ModelOption = {
-  readonly ompModel?: string | undefined;
   readonly key: string;
   readonly label: string;
+  readonly shortName?: string;
   readonly subtitle: string;
   readonly providerKey: string;
   readonly providerLabel: string;
@@ -135,11 +135,7 @@ function normalizeSelectionOptions(
       };
 }
 
-/**
- * `projectId` has no default: a caller that forgets it would silently check only the
- * machine-wide state and miss a project that turned this instance off. Pass `null` explicitly
- * outside a project's scope.
- */
+/** Require explicit projectId or null so omissions cannot bypass project provider disablement. */
 export function isModelSelectionUnavailable(
   config: T3ServerConfig | null | undefined,
   selection: ModelSelection | null | undefined,
@@ -312,7 +308,6 @@ export function buildModelOptions(
 
     const providerLabel = providerDisplayLabel(provider);
     const providerBadge = providerBadgeFor(provider.instanceId);
-    const isOmp = isOmpProvider(config?.settings?.providerInstances?.[provider.instanceId]);
     const updateRequired = provider.updateRequiredModels?.length
       ? { driver: provider.driver, updateRequiredModels: provider.updateRequiredModels }
       : undefined;
@@ -326,14 +321,15 @@ export function buildModelOptions(
       models.sort((a, b) => (order.get(a.slug) ?? Infinity) - (order.get(b.slug) ?? Infinity));
     for (const model of models) {
       const key = `${provider.instanceId}:${model.slug}`;
+      const shortName = resolveModelShortName(model, provider.driver);
       options.set(key, {
         key,
         label: model.name,
+        ...(shortName ? { shortName } : {}),
         subtitle: model.subProvider ?? "",
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
-        ...(isOmp ? { ompModel: model.slug } : {}),
         providerBadge,
         ...(provider.supportedRuntimeModes === undefined
           ? {}
@@ -392,12 +388,15 @@ export function buildModelOptions(
         displayName: provider?.displayName ?? instanceConfig?.displayName,
         instanceId: fallbackModelSelection.instanceId,
       });
+      const shortName = model
+        ? resolveModelShortName(model, isProviderDriverKind(providerDriver) ? providerDriver : null)
+        : undefined;
       options.set(key, {
         key,
         label: model?.name ?? fallbackModelSelection.model,
+        ...(shortName ? { shortName } : {}),
         subtitle: model?.subProvider ?? "",
         providerKey: fallbackModelSelection.instanceId,
-        ...(isOmpProvider(instanceConfig) ? { ompModel: fallbackModelSelection.model } : {}),
         providerLabel,
         providerDriver,
         providerBadge: providerBadgeFor(fallbackModelSelection.instanceId),
@@ -446,54 +445,4 @@ export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyAr
     models: group.models,
     ...(group.updateRequired ? { updateRequired: group.updateRequired } : {}),
   }));
-}
-
-function modelMenuAction(option: ModelOption, selectedModel: ModelSelection | null): MenuAction {
-  return {
-    id: `model:${option.key}`,
-    title: option.label,
-    state:
-      option.selection.instanceId === selectedModel?.instanceId &&
-      option.selection.model === selectedModel.model
-        ? "on"
-        : undefined,
-  };
-}
-
-export function buildModelMenuActions(
-  groups: ReadonlyArray<ProviderGroup>,
-  selectedModel: ModelSelection | null,
-): MenuAction[] {
-  return groups.flatMap((group) => {
-    const currentModels = group.models.filter((model) => !model.isLegacy);
-    const legacyModels = group.models.filter((model) => model.isLegacy);
-    const selected = group.models.find(
-      (model) =>
-        model.selection.instanceId === selectedModel?.instanceId &&
-        model.selection.model === selectedModel.model,
-    );
-
-    return [
-      ...(currentModels.length > 0
-        ? [
-            {
-              id: `provider:${group.providerKey}`,
-              title: group.providerLabel,
-              subtitle: selected && !selected.isLegacy ? selected.label : undefined,
-              subactions: currentModels.map((option) => modelMenuAction(option, selectedModel)),
-            },
-          ]
-        : []),
-      ...(legacyModels.length > 0
-        ? [
-            {
-              id: `legacy-models:${group.providerKey}`,
-              title: `${group.providerLabel} legacy models`,
-              subtitle: selected?.isLegacy ? selected.label : undefined,
-              subactions: legacyModels.map((option) => modelMenuAction(option, selectedModel)),
-            },
-          ]
-        : []),
-    ];
-  });
 }

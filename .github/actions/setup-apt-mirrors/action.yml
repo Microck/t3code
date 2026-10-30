@@ -5,7 +5,7 @@ runs:
   steps:
     - shell: bash
       run: |
-        # GitHub uses apt-mirrors.txt; Blacksmith also uses a mirror-list URI.
+        # Replace the existing Blacksmith mirror list as well as direct sources.
         printf '%s\tpriority:%s\n' \
           https://archive.ubuntu.com/ubuntu 1 \
           https://mirrors.edge.kernel.org/ubuntu 2 \
@@ -15,7 +15,7 @@ runs:
         # APT's mirror transport retries each file against the next server.
         sudo find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) \
           -exec sed -i -E \
-          's#(https?://(([^/]+\.)?archive|security)\.ubuntu\.com/ubuntu/?|mirror\+file:/etc/apt/apt-mirrors\.txt)#mirror+file:/etc/apt/blacksmith-ubuntu-mirrors.txt#g' {} +
+          's#https?://(([^/]+\.)?archive|security)\.ubuntu\.com/ubuntu/?#mirror+file:/etc/apt/blacksmith-ubuntu-mirrors.txt#g' {} +
 
         # Move on to a fallback before an unreachable server exhausts the job.
         printf '%s\n' 'Acquire::http::Timeout "15";' 'Acquire::https::Timeout "15";' \
