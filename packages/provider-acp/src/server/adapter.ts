@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodePath from "node:path";
 
 import {
   type ChatAttachment,
@@ -116,6 +117,7 @@ import {
   type T3AcpInstructionState,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import { materializeAcpImages } from "./imageContent.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import {
@@ -6441,6 +6443,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 yield* Deferred.succeed(steerInjection(injectedSteerId), undefined);
               }
               yield* markPromptStarted(rawNotification);
+              rawNotification = yield* materializeAcpImages(
+                rawNotification,
+                NodePath.join(host.paths.stateDir, "artifacts", "acp-images"),
+              ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
               const embedded = embeddedTerminalIdsFromSessionUpdate(rawNotification);
               if (embedded !== undefined) {
                 rememberEmbeddedTerminals({
