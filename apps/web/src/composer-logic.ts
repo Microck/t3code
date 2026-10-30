@@ -12,7 +12,7 @@ import {
   serializeAssistantCitation,
   withAssistantCitationComment,
 } from "@t3tools/shared/assistantCitations";
-import { isPathWord } from "@t3tools/shared/composerTrigger";
+import { isCurrencyAmountQuery, isPathWord } from "@t3tools/shared/composerTrigger";
 import {
   splitPromptIntoComposerSegments,
   type ComposerPromptSegment,
@@ -99,8 +99,6 @@ export function composerSubmissionIntentForKey(input: {
     return null;
   return "foreground";
 }
-
-const isInlineTokenSegment = (segment: ComposerPromptSegment): boolean => segment.type !== "text";
 
 function clampCursor(text: string, cursor: number): number {
   if (!Number.isFinite(cursor)) return text.length;
@@ -258,34 +256,6 @@ export function collapseExpandedComposerCursor(
   return collapsedCursor;
 }
 
-export function isCollapsedCursorAdjacentToInlineToken(
-  text: string,
-  cursorInput: number,
-  direction: "left" | "right",
-): boolean {
-  const segments = splitPromptIntoComposerSegments(text);
-  if (!segments.some(isInlineTokenSegment)) {
-    return false;
-  }
-
-  const cursor = clampCollapsedComposerCursorForSegments(segments, cursorInput);
-  let collapsedOffset = 0;
-
-  for (const segment of segments) {
-    if (isInlineTokenSegment(segment)) {
-      if (direction === "left" && cursor === collapsedOffset + 1) {
-        return true;
-      }
-      if (direction === "right" && cursor === collapsedOffset) {
-        return true;
-      }
-    }
-    collapsedOffset += collapsedSegmentLength(segment);
-  }
-
-  return false;
-}
-
 /** Local ACP commands have no registry agent ID; identify OMP by its executable, never its label. */
 export function supportsOmpModelMentions(instance: ProviderInstanceConfig | undefined): boolean {
   return isOmpProvider(instance);
@@ -341,6 +311,7 @@ export function detectComposerTrigger(
   }
   const skillPrefix = /^\p{Sc}/u.exec(token);
   if (skillPrefix) {
+    if (isCurrencyAmountQuery(token.slice(skillPrefix[0].length))) return null;
     return {
       kind: "skill",
       query: token.slice(skillPrefix[0].length),
@@ -403,14 +374,19 @@ export function parseStandaloneComposerSlashCommand(
   return "default";
 }
 
-export function replaceTextRange(
+/**
+ * A replacement ending in a space swallows one space already after the range, so inserting
+ * `@file ` before existing text does not leave a double space.
+ */
+export function extendReplacementRangeForTrailingSpace(
   text: string,
-  rangeStart: number,
   rangeEnd: number,
   replacement: string,
-): { text: string; cursor: number } {
-  const safeStart = Math.max(0, Math.min(text.length, rangeStart));
-  const safeEnd = Math.max(safeStart, Math.min(text.length, rangeEnd));
-  const nextText = `${text.slice(0, safeStart)}${replacement}${text.slice(safeEnd)}`;
-  return { text: nextText, cursor: safeStart + replacement.length };
+): number {
+  if (!replacement.endsWith(" ")) {
+    return rangeEnd;
+  }
+  return text[rangeEnd] === " " ? rangeEnd + 1 : rangeEnd;
 }
+
+export { replaceTextRange } from "@t3tools/shared/composerTrigger";
