@@ -5097,12 +5097,25 @@ describe("AcpAdapterV2", () => {
         const path = yield* Path.Path;
         const instanceId = ProviderInstanceId.make("acp-unfinished-tool");
         const threadId = ThreadId.make("thread-acp-unfinished-tool");
+        const capturedMutation: {
+          current: AcpAdapterV2ExtensionContext["applyBackgroundTaskMutation"] | undefined;
+        } = { current: undefined };
         const adapter = yield* makeAcpAdapterV2({
+          continuationRequests: { offer: () => Effect.void },
           instanceId,
           selfInvocation: yield* resolveSelfInvocation(),
           flavor: {
             driver: ACP_TEST_DRIVER,
             capabilities: AcpProviderCapabilitiesV2,
+            enablePostSettleContinuation: true,
+            extractBackgroundTaskId: (tool) =>
+              outcome === "cancelled" && tool.toolCallId === "tool-call-long-running-1"
+                ? "surviving-task"
+                : undefined,
+            registerExtensions: (context) =>
+              Effect.sync(() => {
+                capturedMutation.current = context.applyBackgroundTaskMutation;
+              }),
             makeRuntime: makeMockRuntime({
               childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
               mockAgentPath: yield* path.fromFileUrl(
@@ -5182,6 +5195,24 @@ describe("AcpAdapterV2", () => {
           events.find((event) => event.type === "turn.terminal")?.status,
           expectedStatus,
         );
+        if (outcome === "cancelled") {
+          assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+          const applyMutation = capturedMutation.current;
+          if (applyMutation === undefined)
+            return yield* Effect.die("Missing task mutation handler");
+          yield* applyMutation({
+            sessionId: "mock-session-1",
+            taskId: "surviving-task",
+            status: "running",
+          });
+          assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+          yield* applyMutation({
+            sessionId: "mock-session-1",
+            taskId: "surviving-task",
+            status: "completed",
+          });
+          assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        }
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
@@ -7175,139 +7206,164 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.live("direct Stop quarantine drops late background task mutations from the stopped run", () =>
-    Effect.gen(function* () {
-      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
-      const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
-      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
-      const instanceId = ProviderInstanceId.make("acp-test");
-      const capturedMutation: {
-        current:
-          | ((mutation: {
-              readonly sessionId: string;
-              readonly taskId: string;
-              readonly status: "running" | "completed" | "failed";
-            }) => Effect.Effect<void>)
-          | null;
-      } = { current: null };
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          enablePostSettleContinuation: true,
-          restartRuntimeAfterInterrupt: true,
-          terminateRuntimeProcessGroupOnInterrupt: true,
-          preserveRuntimeOnSettledInterrupt: true,
-          registerExtensions: (context) =>
-            Effect.sync(() => {
-              capturedMutation.current = context.applyBackgroundTaskMutation;
-            }),
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
-            ownDetachedProcessGroup: true,
-            protocolEvents,
-          }),
-        },
-        selfInvocation,
-        continuationRequests: { offer: () => Effect.void },
-      });
-      const threadId = ThreadId.make("thread-acp-stop-quarantine-late-task");
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-stop-quarantine-late-task"),
-        modelSelection,
-        runtimePolicy,
-      });
-      if (runtime.hasPendingBackgroundWork === undefined) {
-        return yield* Effect.die(
-          "ACP runtime must expose hasPendingBackgroundWork when post-settle continuation is enabled.",
+  it.live.each([false, true])(
+    "direct Stop quarantine drops late task mutations with active tool %s",
+    (activeBackgroundTool) =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const path = yield* Path.Path;
+        const selfInvocation = yield* resolveSelfInvocation();
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
-      }
-      const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
-      const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
-      yield* runtime.events.pipe(
-        Stream.runForEach((event) => Queue.offer(events, event)),
-        Effect.forkScoped,
-      );
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      const now = yield* DateTime.now;
-      yield* runtime
-        .startTurn(
-          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
-        )
-        .pipe(Effect.forkScoped);
-      yield* Stream.fromQueue(protocolEvents).pipe(
-        Stream.filter(
-          (event) =>
-            event.direction === "outgoing" && rawProtocolMethod(event) === "session/prompt",
-        ),
-        Stream.runHead,
-      );
-      const applyMutation = capturedMutation.current;
-      if (applyMutation === null) {
-        return yield* Effect.die("registerExtensions must capture applyBackgroundTaskMutation");
-      }
-      yield* applyMutation({
-        sessionId: "mock-session-1",
-        taskId: "task-pre-stop",
-        status: "running",
-      });
-      assert.isTrue(
-        yield* hasPendingBackgroundWork,
-        "a running background task mutation on the root session must track before Stop",
-      );
-      yield* applyMutation({
-        sessionId: "mock-session-1",
-        taskId: "task-pre-stop",
-        status: "completed",
-      });
-      assert.isFalse(
-        yield* hasPendingBackgroundWork,
-        "a completed background task mutation must clear pending background work",
-      );
-
-      const providerTurnId = idAllocator.derive.providerTurn({
-        driver: ACP_TEST_DRIVER,
-        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
-      });
-      yield* runtime.interruptTurn({ providerThread, providerTurnId, requestRuntimeRestart: true });
-      let terminalStatus: string | null = null;
-      while (terminalStatus === null) {
-        const event = yield* Queue.take(events);
-        if (event.type === "turn.terminal" && event.providerTurnId === providerTurnId) {
-          terminalStatus = event.status;
+        const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
+        const instanceId = ProviderInstanceId.make("acp-test");
+        const capturedMutation: {
+          current:
+            | ((mutation: {
+                readonly sessionId: string;
+                readonly taskId: string;
+                readonly status: "running" | "completed" | "failed";
+              }) => Effect.Effect<void>)
+            | null;
+        } = { current: null };
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            enablePostSettleContinuation: true,
+            extractBackgroundTaskId: (tool) =>
+              tool.toolCallId === "tool-call-long-running-1" ? "independent-task" : undefined,
+            restartRuntimeAfterInterrupt: true,
+            terminateRuntimeProcessGroupOnInterrupt: true,
+            preserveRuntimeOnSettledInterrupt: true,
+            registerExtensions: (context) =>
+              Effect.sync(() => {
+                capturedMutation.current = context.applyBackgroundTaskMutation;
+              }),
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              environment: activeBackgroundTool
+                ? { T3_ACP_EMIT_ACTIVE_TOOL_THEN_HANG: "1" }
+                : { T3_ACP_HANG_PROMPT_FOREVER: "1" },
+              ownDetachedProcessGroup: true,
+              protocolEvents,
+            }),
+          },
+          selfInvocation,
+          continuationRequests: { offer: () => Effect.void },
+        });
+        const threadId = ThreadId.make("thread-acp-stop-quarantine-late-task");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(
+            "provider-session-acp-stop-quarantine-late-task",
+          ),
+          modelSelection,
+          runtimePolicy,
+        });
+        if (runtime.hasPendingBackgroundWork === undefined) {
+          return yield* Effect.die(
+            "ACP runtime must expose hasPendingBackgroundWork when post-settle continuation is enabled.",
+          );
         }
-      }
-      assert.equal(terminalStatus, "interrupted");
+        const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
+        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => Queue.offer(events, event)),
+          Effect.forkScoped,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime
+          .startTurn(
+            makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* Stream.fromQueue(protocolEvents).pipe(
+          Stream.filter(
+            (event) =>
+              event.direction === "outgoing" && rawProtocolMethod(event) === "session/prompt",
+          ),
+          Stream.runHead,
+        );
+        if (activeBackgroundTool) {
+          while (true) {
+            const event = yield* Queue.take(events);
+            if (
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "tool-call-long-running-1" &&
+              event.turnItem.status === "running"
+            )
+              break;
+          }
+        }
+        const applyMutation = capturedMutation.current;
+        if (applyMutation === null) {
+          return yield* Effect.die("registerExtensions must capture applyBackgroundTaskMutation");
+        }
+        yield* applyMutation({
+          sessionId: "mock-session-1",
+          taskId: "task-pre-stop",
+          status: "running",
+        });
+        assert.isTrue(
+          yield* hasPendingBackgroundWork,
+          "a running background task mutation on the root session must track before Stop",
+        );
+        yield* applyMutation({
+          sessionId: "mock-session-1",
+          taskId: "task-pre-stop",
+          status: "completed",
+        });
+        assert.equal(
+          yield* hasPendingBackgroundWork,
+          activeBackgroundTool,
+          "completing one task must preserve an independent running command",
+        );
 
-      yield* applyMutation({
-        sessionId: "mock-session-1",
-        taskId: "task-late-after-stop",
-        status: "running",
-      });
-      assert.isFalse(
-        yield* hasPendingBackgroundWork,
-        "direct Stop quarantine must drop residual background task mutations from the stopped run",
-      );
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
+        const providerTurnId = idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
+        });
+        yield* runtime.interruptTurn({
+          providerThread,
+          providerTurnId,
+          requestRuntimeRestart: true,
+        });
+        let terminalStatus: string | null = null;
+        while (terminalStatus === null) {
+          const event = yield* Queue.take(events);
+          if (event.type === "turn.terminal" && event.providerTurnId === providerTurnId) {
+            terminalStatus = event.status;
+          }
+        }
+        assert.equal(terminalStatus, "interrupted");
+        assert.isFalse(yield* hasPendingBackgroundWork, "confirmed Stop must clear active work");
+
+        yield* applyMutation({
+          sessionId: "mock-session-1",
+          taskId: "task-late-after-stop",
+          status: "running",
+        });
+        assert.isFalse(
+          yield* hasPendingBackgroundWork,
+          "direct Stop quarantine must drop residual background task mutations from the stopped run",
+        );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(

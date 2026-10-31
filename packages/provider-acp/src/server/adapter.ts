@@ -3642,25 +3642,28 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             if (flavor.isPersistentBackgroundTool?.(toolCall) === true) {
               context.persistentBackgroundTaskIds.add(backgroundTaskId);
             }
-            const backgroundStatus = projectedStatus ?? toolStatus(toolCall.status);
-            yield* setBackgroundTaskRunning(
-              backgroundTaskId,
-              backgroundStatus === "pending" || backgroundStatus === "running",
-            );
-            if (
-              !context.promptSettled &&
-              backgroundStatus !== "pending" &&
-              backgroundStatus !== "running"
-            ) {
-              yield* Ref.update(handledBackgroundTaskIdsInActiveTurn, (current) =>
-                new Set(current).add(backgroundTaskId),
+            // Projected turn cleanup is not evidence that an independent task stopped.
+            if (projectedStatus === undefined) {
+              const backgroundStatus = toolStatus(toolCall.status);
+              yield* setBackgroundTaskRunning(
+                backgroundTaskId,
+                backgroundStatus === "pending" || backgroundStatus === "running",
               );
-              yield* Ref.update(midTurnUnreportedCompletedTaskIds, (current) => {
-                if (!current.has(backgroundTaskId)) return current;
-                const next = new Set(current);
-                next.delete(backgroundTaskId);
-                return next;
-              });
+              if (
+                !context.promptSettled &&
+                backgroundStatus !== "pending" &&
+                backgroundStatus !== "running"
+              ) {
+                yield* Ref.update(handledBackgroundTaskIdsInActiveTurn, (current) =>
+                  new Set(current).add(backgroundTaskId),
+                );
+                yield* Ref.update(midTurnUnreportedCompletedTaskIds, (current) => {
+                  if (!current.has(backgroundTaskId)) return current;
+                  const next = new Set(current);
+                  next.delete(backgroundTaskId);
+                  return next;
+                });
+              }
             }
           }
 
@@ -3763,7 +3766,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               [...context.toolCallIdsByBackgroundTaskId].find(
                 ([, id]) => id === toolCall.toolCallId,
               )?.[0];
-            if (registeredTaskId !== undefined) yield* markBackgroundTaskEnded(registeredTaskId);
+            const nativeStatus = toolStatus(toolCall.status);
+            if (
+              registeredTaskId !== undefined &&
+              (projectedStatus === undefined ||
+                nativeStatus === "completed" ||
+                nativeStatus === "failed" ||
+                nativeStatus === "interrupted" ||
+                retainedRpcTools.get(retainedKey) === context)
+            )
+              yield* markBackgroundTaskEnded(registeredTaskId);
             if (retainedRpcTools.get(retainedKey) === context) {
               context.tools.set(toolCall.toolCallId, {
                 ...context.tools.get(toolCall.toolCallId)!,
