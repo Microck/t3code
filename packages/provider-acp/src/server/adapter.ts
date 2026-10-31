@@ -2041,6 +2041,20 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             runtimeGeneration,
             Effect.gen(function* () {
               yield* Ref.set(runtimeRestartRequired, true);
+              // The failed prompt already released activeTurn, but its command rows still own events.
+              for (const owner of new Set(retainedRpcTools.values())) {
+                for (const tool of owner.tools.values()) {
+                  const key = sessionScopedId(owner.nativeThreadId, tool.toolCallId);
+                  if (retainedRpcTools.get(key) !== owner) continue;
+                  yield* emitTool(owner, tool, "failed");
+                  retainedRpcTools.delete(key);
+                  settledRpcTools.add(key);
+                  const taskId = flavor.extractBackgroundTaskId?.(tool);
+                  if (taskId !== undefined) yield* markBackgroundTaskEnded(taskId);
+                }
+              }
+              const carryover = yield* Ref.getAndSet(carryoverSubagents, null);
+              yield* terminalizeCarryoverSubagents(carryover, "failed");
               if (!followsAgentWorkState) return;
               agentWork = { sessionUpdate: "state_update", state: "idle", stopReason: "error" };
               for (const child of nativeChildren.values()) {
@@ -5887,6 +5901,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 
         const terminalizeCarryoverSubagents = Effect.fnUntraced(function* (
           carryover: AcpCarryoverSubagents | null,
+          status: "interrupted" | "failed" = "interrupted",
         ) {
           if (carryover === null) return;
           for (const subagent of carryover.subagents) {
@@ -5901,7 +5916,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
               continue;
             }
-            yield* projectCarryoverSubagentStatus(subagent, "interrupted");
+            yield* projectCarryoverSubagentStatus(subagent, status);
           }
         });
 
@@ -7065,7 +7080,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context.finalizedStatus = settledStatus;
           context.finalized = true;
           const directStopQuarantine = yield* Ref.get(stoppedRunQuarantine);
+          const runtimeTerminated = yield* Ref.get(runtimeRestartRequired);
           const survivingRpcChildren =
+            !runtimeTerminated &&
             options?.retainRpcTools === true &&
             ([...context.subagents.values()].some((subagent) =>
               acpSubagentStatusBlocksTurnSettlement(subagent.task.status),
@@ -7075,10 +7092,33 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 const state = tool === undefined ? undefined : toolStatus(tool.status);
                 return state === "pending" || state === "running";
               }));
+          if (settledStatus === "failed" && runtimeTerminated) {
+            for (const tool of context.tools.values()) {
+              if (extractSubagentUpdate(tool) !== undefined) continue;
+              const state = toolStatus(tool.status);
+              if (state === "pending" || state === "running" || state === "waiting")
+                yield* emitTool(context, tool, "failed");
+            }
+            for (const subagent of context.subagents.values()) {
+              if (acpSubagentStatusIsTerminal(subagent.task.status)) continue;
+              yield* terminalizeSubagentTools(subagent);
+              yield* emitSubagent(context, {
+                nativeTaskId: subagent.task.nativeTaskRef?.nativeId ?? subagent.task.id,
+                prompt: subagent.task.prompt,
+                title: subagent.task.title,
+                model: subagent.task.model,
+                status: "failed",
+                childSessionId: subagent.childSessionId,
+                result: subagent.task.result,
+                suppressNormalTool: true,
+              });
+            }
+          }
           let retainedRpcWork = false;
           if (
             settledStatus === "failed" &&
             options?.retainRpcTools === true &&
+            !runtimeTerminated &&
             !directStopQuarantine
           ) {
             for (const tool of context.tools.values()) {

@@ -3755,11 +3755,21 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.live.each(["tool", "terminal", "synthetic"] as const)(
+  it.live.each([
+    "tool",
+    "terminal",
+    "synthetic",
+    "termination",
+    "termination-before",
+    "subagent-termination",
+    "subagent-termination-before",
+  ] as const)(
     "routes retained RPC commands through %s events to their original turn without duplicate terminals",
     (transport) =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
+        const subagentOnly = transport.startsWith("subagent-");
+        const terminatesFirst = transport.endsWith("-before");
         type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
         let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
         const firstStarted = yield* Deferred.make<void>();
@@ -3767,39 +3777,60 @@ describe("AcpAdapterV2", () => {
         const secondStarted = yield* Deferred.make<void>();
         const finishSecond = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
         let prompts = 0;
+        const runtimeInputs: AcpAdapterV2RuntimeInput[] = [];
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
         const instanceId = ProviderInstanceId.make("rpc-late-tools");
         const threadId = ThreadId.make("thread-rpc-late-tools");
         const adapter = yield* makeAcpAdapterV2({
           instanceId,
+          ...(subagentOnly ? { continuationRequests: { offer: () => Effect.void } } : {}),
           selfInvocation: yield* resolveSelfInvocation(),
           flavor: {
             driver: ACP_TEST_DRIVER,
             capabilities: AcpProviderCapabilitiesV2,
-            makeRuntime: makeMockRuntime({
-              childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-              mockAgentPath: yield* path.fromFileUrl(
-                new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-              ),
-              wrapRuntime: (runtime) => ({
-                ...runtime,
-                handleSessionUpdate: (handler) =>
-                  Effect.sync(() => {
-                    sessionUpdateHandler = handler;
-                  }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
-                prompt: () =>
-                  Effect.gen(function* () {
-                    if (++prompts === 1) {
-                      yield* Deferred.succeed(firstStarted, undefined);
-                      yield* Deferred.await(failFirst);
-                      return yield* EffectAcpErrors.AcpRequestError.internalError(
-                        "RPC ended before its commands",
-                      );
-                    }
-                    yield* Deferred.succeed(secondStarted, undefined);
-                    return yield* Deferred.await(finishSecond);
-                  }),
-              }),
-            }),
+            enablePostSettleContinuation: subagentOnly,
+            extractSubagentUpdate: (tool) =>
+              tool.toolCallId === "rpc-subagent"
+                ? {
+                    nativeTaskId: "rpc-child",
+                    prompt: "child work",
+                    title: "child work",
+                    model: null,
+                    status: "running",
+                    childSessionId: null,
+                    result: null,
+                    suppressNormalTool: true,
+                  }
+                : undefined,
+            makeRuntime: (runtimeInput) => {
+              runtimeInputs.push(runtimeInput);
+              return makeMockRuntime({
+                childProcessSpawner,
+                mockAgentPath,
+                wrapRuntime: (runtime) => ({
+                  ...runtime,
+                  handleSessionUpdate: (handler) =>
+                    Effect.sync(() => {
+                      sessionUpdateHandler = handler;
+                    }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+                  prompt: () =>
+                    Effect.gen(function* () {
+                      if (++prompts === 1) {
+                        yield* Deferred.succeed(firstStarted, undefined);
+                        yield* Deferred.await(failFirst);
+                        return yield* EffectAcpErrors.AcpRequestError.internalError(
+                          "RPC ended before its commands",
+                        );
+                      }
+                      yield* Deferred.succeed(secondStarted, undefined);
+                      return yield* Deferred.await(finishSecond);
+                    }),
+                }),
+              })(runtimeInput);
+            },
           },
         });
         const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -3831,7 +3862,7 @@ describe("AcpAdapterV2", () => {
           sessionUpdateHandler!({ sessionId, update });
         const nativeCommandId = (id: string) =>
           transport === "synthetic" ? `acp-agent-terminal:${id}-terminal` : id;
-        for (const id of ["rpc-command-one", "rpc-command-two"]) {
+        for (const id of subagentOnly ? [] : ["rpc-command-one", "rpc-command-two"]) {
           if (transport === "synthetic") {
             yield* update({
               sessionUpdate: "terminal_update",
@@ -3852,6 +3883,14 @@ describe("AcpAdapterV2", () => {
               : {}),
           });
         }
+        if (subagentOnly)
+          yield* update({
+            sessionUpdate: "tool_call",
+            toolCallId: "rpc-subagent",
+            kind: "other",
+            title: "Child",
+            status: "in_progress",
+          });
         yield* update({
           sessionUpdate: "tool_call",
           toolCallId: "rpc-read",
@@ -3866,6 +3905,13 @@ describe("AcpAdapterV2", () => {
           kind: "other",
           status: "pending",
         });
+        if (terminatesFirst)
+          yield* runtimeInputs[0]!.onTermination!(
+            new EffectAcpErrors.AcpTransportError({
+              detail: "Injected runtime termination after RPC failure",
+              cause: "test",
+            }),
+          );
         yield* Deferred.succeed(failFirst, undefined);
         const firstEvents = Array.from(
           yield* runtime.events.pipe(
@@ -3877,7 +3923,8 @@ describe("AcpAdapterV2", () => {
         assert.equal(firstTerminal?.type, "turn.terminal");
         if (firstTerminal?.type !== "turn.terminal") return;
         assert.equal(firstTerminal.status, "failed");
-        if (firstTerminal.status === "failed") assert.equal(firstTerminal.childTurnsContinue, true);
+        if (firstTerminal.status === "failed")
+          assert.equal(firstTerminal.childTurnsContinue, terminatesFirst ? undefined : true);
         for (const id of ["rpc-read", "rpc-wait"]) {
           const last = firstEvents.findLast(
             (event) =>
@@ -3886,7 +3933,62 @@ describe("AcpAdapterV2", () => {
           assert.equal(last?.type, "turn_item.updated");
           if (last?.type === "turn_item.updated") assert.equal(last.turnItem.status, "failed");
         }
-        assert.isUndefined(runtime.hasPendingBackgroundWork);
+        if (subagentOnly) {
+          assert.isDefined(runtime.hasPendingBackgroundWork);
+          assert.equal(yield* runtime.hasPendingBackgroundWork!, !terminatesFirst);
+        } else assert.isUndefined(runtime.hasPendingBackgroundWork);
+        if (transport.includes("termination")) {
+          if (!terminatesFirst)
+            yield* runtimeInputs[0]!.onTermination!(
+              new EffectAcpErrors.AcpTransportError({
+                detail: "Injected runtime termination after RPC failure",
+                cause: "test",
+              }),
+            );
+          const ended = terminatesFirst
+            ? firstEvents
+            : Array.from(
+                yield* runtime.events.pipe(
+                  Stream.takeUntil((event) =>
+                    subagentOnly
+                      ? event.type === "subagent.updated" && event.subagent.status === "failed"
+                      : event.type === "turn_item.updated" &&
+                        event.turnItem.nativeItemRef?.nativeId === "rpc-command-two" &&
+                        event.turnItem.status === "failed",
+                  ),
+                  Stream.runCollect,
+                ),
+              );
+          if (subagentOnly) {
+            const failed = ended.filter(
+              (event) => event.type === "subagent.updated" && event.subagent.status === "failed",
+            );
+            assert.lengthOf(failed, 1);
+            const event = failed[0]!;
+            if (event.type === "subagent.updated") assert.isNotNull(event.subagent.completedAt);
+            assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+            assert.equal(
+              ended.filter((event) => event.type === "turn.terminal").length,
+              terminatesFirst ? 1 : 0,
+            );
+            return;
+          }
+          for (const id of ["rpc-command-one", "rpc-command-two"]) {
+            const terminalItems = ended.filter(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.nativeItemRef?.nativeId === id &&
+                event.turnItem.status === "failed",
+            );
+            assert.lengthOf(terminalItems, 1);
+            const event = terminalItems[0]!;
+            if (event.type === "turn_item.updated") {
+              assert.equal(event.turnItem.providerTurnId, firstTerminal.providerTurnId);
+              assert.isNotNull(event.turnItem.completedAt);
+            }
+          }
+          return;
+        }
         if (transport !== "tool") {
           yield* update({
             sessionUpdate: "terminal_output_chunk",
