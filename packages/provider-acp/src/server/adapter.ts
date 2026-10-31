@@ -1127,6 +1127,11 @@ interface ActiveAcpTurn {
     string,
     { readonly status: "completed" | "failed"; readonly output?: string } | null
   >;
+  /** Authoritative task endings, independent of successful-turn output hydration timing. */
+  readonly backgroundTaskTerminals: Map<
+    string,
+    { readonly status: "completed" | "failed"; readonly output?: string }
+  >;
   readonly persistentBackgroundTaskIds: Set<string>;
   /**
    * Monitor end events often only say "use get_command…"; keep the turn open
@@ -2006,13 +2011,56 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             return next;
           }).pipe(Effect.andThen(setBackgroundTaskRunning(taskId, false)));
 
-        const applyBackgroundTaskMutationRunning = (mutation: {
-          readonly taskId: string;
-          readonly status: "running" | "completed" | "failed";
-        }) =>
-          mutation.status === "running"
-            ? setBackgroundTaskRunning(mutation.taskId, true)
-            : markBackgroundTaskEnded(mutation.taskId);
+        const applyBackgroundTaskMutationRunning = Effect.fnUntraced(function* (
+          sessionId: string,
+          mutation: {
+            readonly taskId: string;
+            readonly status: "running" | "completed" | "failed";
+            readonly output?: string;
+            readonly appendOutput?: string;
+          },
+        ) {
+          if ((yield* Ref.get(activeSessionId)) !== sessionId) return;
+          if (mutation.status === "running") {
+            yield* setBackgroundTaskRunning(mutation.taskId, true);
+            return;
+          }
+          yield* markBackgroundTaskEnded(mutation.taskId);
+          const owners = new Set(retainedRpcTools.values());
+          const active = yield* Ref.get(activeTurn);
+          if (active !== null) owners.add(active);
+          for (const owner of owners) {
+            if (owner.nativeThreadId !== sessionId) continue;
+            const previous = owner.backgroundTaskTerminals.get(mutation.taskId);
+            const status = previous?.status === "failed" ? "failed" : mutation.status;
+            const output = mutation.output ?? previous?.output;
+            owner.backgroundTaskTerminals.set(mutation.taskId, {
+              status,
+              ...(output === undefined ? {} : { output }),
+            });
+            for (const tool of owner.tools.values()) {
+              const key = sessionScopedId(sessionId, tool.toolCallId);
+              if (retainedRpcTools.get(key) !== owner) continue;
+              if (
+                flavor.extractBackgroundTaskId?.(tool) !== mutation.taskId &&
+                tool.backgroundCommandTaskId !== mutation.taskId &&
+                owner.toolCallIdsByBackgroundTaskId.get(mutation.taskId) !== tool.toolCallId
+              )
+                continue;
+              owner.awaitingBackgroundHydration.delete(mutation.taskId);
+              const finished = { ...tool, status };
+              yield* emitTool(
+                owner,
+                output !== undefined
+                  ? setToolOutputText(finished, output)
+                  : mutation.appendOutput
+                    ? appendToolOutputText(finished, mutation.appendOutput)
+                    : finished,
+                status,
+              );
+            }
+          }
+        });
 
         const trackRunningBackgroundTools =
           /* Provider events include streaming deltas; avoid a span for each update. */
@@ -2049,10 +2097,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   yield* emitTool(owner, tool, "failed");
                   retainedRpcTools.delete(key);
                   settledRpcTools.add(key);
-                  const taskId = flavor.extractBackgroundTaskId?.(tool);
-                  if (taskId !== undefined) yield* markBackgroundTaskEnded(taskId);
                 }
               }
+              for (const taskId of yield* Ref.get(runningBackgroundTaskIds))
+                yield* markBackgroundTaskEnded(taskId);
               const carryover = yield* Ref.getAndSet(carryoverSubagents, null);
               yield* terminalizeCarryoverSubagents(carryover, "failed");
               if (!followsAgentWorkState) return;
@@ -3512,6 +3560,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           incoming: AcpToolCallState,
           projectedStatus?: ProjectedToolStatus,
         ) {
+          if (settledRpcTools.has(sessionScopedId(context.nativeThreadId, incoming.toolCallId)))
+            return;
           if (context.assistant.current?.sourceMessageId == null)
             yield* closeTextStream(context, "assistant");
           if (context.reasoning.current?.sourceMessageId == null)
@@ -3592,7 +3642,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               : [];
           let hydratedRegisteredMonitor = false;
           for (const backgroundCompletion of backgroundCompletions) {
-            yield* applyBackgroundTaskMutationRunning(backgroundCompletion);
+            yield* applyBackgroundTaskMutationRunning(context.nativeThreadId, backgroundCompletion);
             if (backgroundCompletion.status !== "running") {
               yield* Ref.update(handledBackgroundTaskIdsInActiveTurn, (current) =>
                 new Set(current).add(backgroundCompletion.taskId),
@@ -3677,6 +3727,24 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             return;
           }
           const status = projectedStatus ?? toolStatus(toolCall.status);
+          const retainedKey = sessionScopedId(context.nativeThreadId, toolCall.toolCallId);
+          if (status === "completed" || status === "failed" || status === "interrupted") {
+            const registeredTaskId =
+              backgroundCommandTaskId ??
+              backgroundTaskId ??
+              [...context.toolCallIdsByBackgroundTaskId].find(
+                ([, id]) => id === toolCall.toolCallId,
+              )?.[0];
+            if (registeredTaskId !== undefined) yield* markBackgroundTaskEnded(registeredTaskId);
+            if (retainedRpcTools.get(retainedKey) === context) {
+              context.tools.set(toolCall.toolCallId, {
+                ...context.tools.get(toolCall.toolCallId)!,
+                status: status === "interrupted" ? "failed" : status,
+              });
+              retainedRpcTools.delete(retainedKey);
+              settledRpcTools.add(retainedKey);
+            }
+          }
           const now = yield* DateTime.now;
           const nativeItemId = `${context.nativeThreadId}:tool:${toolCall.toolCallId}`;
           const ordinal = yield* resolveItemOrdinal(context, nativeItemId);
@@ -4269,10 +4337,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           mutation: {
             readonly taskId: string;
             readonly status: "running" | "completed" | "failed";
+            readonly output?: string;
+            readonly appendOutput?: string;
           },
         ) {
           const taskAlreadyEnded = (yield* Ref.get(endedBackgroundTaskIds)).has(mutation.taskId);
-          yield* applyBackgroundTaskMutationRunning(mutation);
+          yield* applyBackgroundTaskMutationRunning(sessionId, mutation);
           if (mutation.status === "running") {
             if (taskAlreadyEnded && acpPostSettleMonitorPromptShouldSuppress(mutation)) {
               yield* Ref.set(suppressPostSettleMonitorPrompt, true);
@@ -4399,7 +4469,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   alreadyHandledToolUpdate =
                     alreadyHandledToolUpdate ||
                     (yield* Ref.get(handledBackgroundTaskIdsInActiveTurn)).has(completion.taskId);
-                  yield* applyBackgroundTaskMutationRunning(completion);
+                  yield* applyBackgroundTaskMutationRunning(notification.sessionId, completion);
                 }
               }
             }
@@ -5156,7 +5226,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       ),
                     );
                   }
-                  yield* applyBackgroundTaskMutationRunning(mutation);
+                  yield* applyBackgroundTaskMutationRunning(context.nativeThreadId, mutation);
                   if (mutation.status !== "running" && !reportArrivedBeforeNotice) {
                     yield* markPendingInjectedReport(context, mutation.taskId);
                   }
@@ -7056,6 +7126,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             Effect.gen(function* () {
               yield* Ref.update(continuationGeneration, (value) => value + 1);
               yield* Ref.set(stoppedRunQuarantine, true);
+              for (const owner of new Set(retainedRpcTools.values())) {
+                for (const tool of owner.tools.values()) {
+                  const key = sessionScopedId(owner.nativeThreadId, tool.toolCallId);
+                  if (retainedRpcTools.get(key) === owner)
+                    yield* emitTool(owner, tool, "interrupted");
+                }
+              }
               for (const key of retainedRpcTools.keys()) settledRpcTools.add(key);
               retainedRpcTools.clear();
               yield* Ref.set(wakeBuffer, []);
@@ -7081,6 +7158,43 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context.finalized = true;
           const directStopQuarantine = yield* Ref.get(stoppedRunQuarantine);
           const runtimeTerminated = yield* Ref.get(runtimeRestartRequired);
+          if (
+            settledStatus === "failed" &&
+            options?.retainRpcTools === true &&
+            !runtimeTerminated
+          ) {
+            for (const tool of context.tools.values()) {
+              const taskId =
+                tool.backgroundCommandTaskId ??
+                [...context.toolCallIdsByBackgroundTaskId].find(
+                  ([, id]) => id === tool.toolCallId,
+                )?.[0] ??
+                flavor.extractBackgroundTaskId?.(tool);
+              const terminal =
+                taskId === undefined ? undefined : context.backgroundTaskTerminals.get(taskId);
+              const state = toolStatus(tool.status);
+              if (
+                terminal === undefined ||
+                (state !== "pending" && state !== "running" && state !== "waiting")
+              )
+                continue;
+              context.awaitingBackgroundHydration.delete(taskId!);
+              const finished = { ...tool, status: terminal.status };
+              yield* emitTool(
+                context,
+                terminal.output === undefined
+                  ? finished
+                  : setToolOutputText(finished, terminal.output),
+                terminal.status,
+              );
+              // A normalized background ACK must not overwrite this authoritative terminal evidence.
+              context.tools.set(tool.toolCallId, {
+                ...context.tools.get(tool.toolCallId)!,
+                status: terminal.status,
+              });
+              settledRpcTools.add(sessionScopedId(context.nativeThreadId, tool.toolCallId));
+            }
+          }
           const survivingRpcChildren =
             !runtimeTerminated &&
             options?.retainRpcTools === true &&
@@ -7589,6 +7703,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               pendingSubagentNotifications: new Map(),
               toolCallIdsByBackgroundTaskId: new Map(),
               backgroundCommands: new Map(),
+              backgroundTaskTerminals: new Map(),
               persistentBackgroundTaskIds: new Set(),
               awaitingBackgroundHydration: new Set(),
               pendingInjectedReport: new Set(),

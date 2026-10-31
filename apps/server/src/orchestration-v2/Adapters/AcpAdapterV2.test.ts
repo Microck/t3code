@@ -4148,6 +4148,415 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.live.each([
+    "structured",
+    "direct",
+    "termination",
+    "termination-before",
+    "monitor",
+    "task-output",
+    "kill-task",
+    "kill-failed",
+    "structured-before",
+    "monitor-before",
+    "stop",
+  ] as const)("settles failed-RPC Grok work through %s evidence", (source) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const instanceId = ProviderInstanceId.make("rpc-background-evidence");
+      const threadId = ThreadId.make("thread-rpc-background-evidence");
+      const taskId = "019f44a5-87d1-7640-8e35-6a4667ffc873";
+      const beforeFailure = source === "structured-before" || source === "monitor-before";
+      const monitor = source.startsWith("monitor");
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+      let taskCompleted:
+        | ((payload: unknown) => Effect.Effect<void, EffectAcpErrors.AcpError>)
+        | undefined;
+      const started = yield* Deferred.make<void>();
+      const fail = yield* Deferred.make<void>();
+      const nextStarted = yield* Deferred.make<void>();
+      const finishNext = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
+      let prompts = 0;
+      const runtimeInputs: AcpAdapterV2RuntimeInput[] = [];
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      let teardownCount = 0;
+      const grok = makeGrokAcpAdapterFlavor(
+        {
+          instanceId,
+          settings: DEFAULT_GROK_SETTINGS,
+          environment: {},
+          hostPlatform: yield* HostProcess.Platform,
+          selfInvocation,
+        },
+        yield* HostProcess.HomeDirectory,
+      );
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        selfInvocation,
+        continuationRequests: { offer: () => Effect.void },
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          enablePostSettleContinuation: true,
+          terminateRuntimeProcessGroupOnInterrupt: source === "stop",
+          normalizeToolCall: grok.normalizeToolCall!,
+          extractBackgroundTaskId: grok.extractBackgroundTaskId!,
+          isBackgroundCommandTool: grok.isBackgroundCommandTool!,
+          extractBackgroundToolMutation: grok.extractBackgroundToolMutation!,
+          extractBackgroundTaskCompletion: grok.extractBackgroundTaskCompletion!,
+          extractSubagentUpdate: grok.extractSubagentUpdate!,
+          registerExtensions: ({ runtime, applyBackgroundTaskMutation }) =>
+            registerXAiBackgroundTaskTracking(runtime, applyBackgroundTaskMutation),
+          makeRuntime: (runtimeInput) => {
+            runtimeInputs.push(runtimeInput);
+            return makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              wrapRuntime: (runtime) => ({
+                ...runtime,
+                ...(source === "stop"
+                  ? {
+                      terminateProcessGroup: Effect.sync(() => {
+                        teardownCount += 1;
+                      }),
+                    }
+                  : {}),
+                handleSessionUpdate: (handler) =>
+                  Effect.sync(() => {
+                    sessionUpdateHandler = handler;
+                  }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+                handleExtNotification: (method, schema, handler) =>
+                  Effect.sync(() => {
+                    if (method === "x.ai/task_completed")
+                      taskCompleted = (payload) =>
+                        handler(Schema.decodeUnknownSync(schema)(payload));
+                  }).pipe(Effect.andThen(runtime.handleExtNotification(method, schema, handler))),
+                prompt: () =>
+                  Effect.gen(function* () {
+                    if (++prompts === 1) {
+                      yield* Deferred.succeed(started, undefined);
+                      yield* Deferred.await(fail);
+                      return yield* EffectAcpErrors.AcpRequestError.internalError(
+                        "injected failed RPC",
+                      );
+                    }
+                    yield* Deferred.succeed(nextStarted, undefined);
+                    return yield* Deferred.await(finishNext);
+                  }),
+              }),
+            })(runtimeInput);
+          },
+        },
+      });
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("session-background-evidence"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime
+        .startTurn(
+          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
+        )
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(started);
+      const update = (update: EffectAcpSchema.SessionUpdate, sessionId = "mock-session-1") =>
+        sessionUpdateHandler!({ sessionId, update });
+      const complete = (sessionId = "mock-session-1") =>
+        taskCompleted!({
+          sessionId,
+          update: {
+            sessionUpdate: "task_completed",
+            task_id: taskId,
+            task_snapshot: { exit_code: 0, output: "BACKGROUND_DONE\n" },
+          },
+        });
+      const ended = (sessionId = "mock-session-1") =>
+        update(
+          {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: `Monitor "${taskId}" ended cleanly` },
+          },
+          sessionId,
+        );
+      yield* update({
+        sessionUpdate: "tool_call",
+        toolCallId: "background-command",
+        kind: "execute",
+        title: monitor ? "Monitor" : "Run command",
+        status: "completed",
+        rawInput: monitor ? { variant: "monitor", command: "sleep 1" } : { command: "sleep 1" },
+        rawOutput: monitor
+          ? { type: "Monitor", taskId, persistent: false }
+          : { type: "BackgroundTaskStarted", task_id: taskId },
+      });
+      if (!monitor)
+        yield* update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "background-command",
+          status: "in_progress",
+          rawOutput: { type: "Text", text: "progress\n" },
+        });
+      if (beforeFailure) {
+        if (monitor) yield* ended();
+        else yield* complete();
+      }
+      if (source === "termination-before")
+        yield* runtimeInputs[0]!.onTermination!(
+          new EffectAcpErrors.AcpTransportError({ detail: "Injected runtime end", cause: "test" }),
+        );
+      yield* Deferred.succeed(fail, undefined);
+      const firstEvents = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      );
+      const firstTerminal = firstEvents.find((event) => event.type === "turn.terminal");
+      assert.equal(firstTerminal?.type, "turn.terminal");
+      if (firstTerminal?.type !== "turn.terminal" || firstTerminal.status !== "failed")
+        return assert.fail("expected failed root");
+      assert.equal(
+        firstTerminal.childTurnsContinue,
+        beforeFailure || source === "termination-before" ? undefined : true,
+      );
+      assert.isDefined(runtime.hasPendingBackgroundWork);
+      if (source === "termination" || source === "termination-before") {
+        if (source === "termination")
+          yield* runtimeInputs[0]!.onTermination!(
+            new EffectAcpErrors.AcpTransportError({
+              detail: "Injected runtime end",
+              cause: "test",
+            }),
+          );
+        const endedEvents =
+          source === "termination-before"
+            ? firstEvents
+            : Array.from(
+                yield* runtime.events.pipe(
+                  Stream.takeUntil(
+                    (event) =>
+                      event.type === "turn_item.updated" &&
+                      event.turnItem.nativeItemRef?.nativeId === "background-command" &&
+                      event.turnItem.status === "failed",
+                  ),
+                  Stream.runCollect,
+                ),
+              );
+        const endings = endedEvents.filter(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === "background-command" &&
+            event.turnItem.status === "failed",
+        );
+        assert.lengthOf(endings, 1);
+        const ending = endings[0]!;
+        if (ending.type === "turn_item.updated") {
+          assert.equal(ending.turnItem.providerTurnId, firstTerminal.providerTurnId);
+          assert.isNotNull(ending.turnItem.completedAt);
+        }
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        return;
+      }
+      if (beforeFailure) {
+        const item = firstEvents.findLast(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === "background-command",
+        );
+        assert.equal(item?.type, "turn_item.updated");
+        if (item?.type === "turn_item.updated") {
+          assert.equal(item.turnItem.status, "completed");
+          assert.isNotNull(item.turnItem.completedAt);
+        }
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        yield* runtime
+          .startTurn(
+            makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 2 }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(nextStarted);
+        yield* update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "background-command",
+          status: "in_progress",
+        });
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "pre-failure-fence",
+          kind: "other",
+          title: "Fence",
+          status: "completed",
+        });
+        const replay = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.nativeItemRef?.nativeId === "pre-failure-fence",
+            ),
+            Stream.runCollect,
+          ),
+        );
+        assert.isFalse(
+          replay.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "background-command",
+          ),
+        );
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        yield* Deferred.succeed(finishNext, { stopReason: "end_turn" });
+        yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.runHead,
+        );
+        return;
+      }
+      assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+      if (source === "stop") {
+        yield* runtime.interruptTurn({
+          providerThread,
+          providerTurnId: firstTerminal.providerTurnId,
+          requestRuntimeRestart: true,
+        });
+        assert.equal(teardownCount, 1);
+        const terminal = yield* runtime.events.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "background-command" &&
+              (event.turnItem.status === "interrupted" || event.turnItem.status === "failed"),
+          ),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(terminal));
+        if (Option.isSome(terminal) && terminal.value.type === "turn_item.updated") {
+          assert.equal(terminal.value.turnItem.status, "interrupted");
+          assert.isNotNull(terminal.value.turnItem.completedAt);
+        }
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        return;
+      }
+      yield* runtime
+        .startTurn(
+          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 2 }),
+        )
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(nextStarted);
+      yield* complete("foreign-session");
+      yield* ended("foreign-session");
+      assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+      if (source === "kill-failed") {
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "failed-kill",
+          kind: "other",
+          title: "kill",
+          status: "completed",
+          rawInput: { variant: "KillTask", task_id: taskId },
+          rawOutput: { type: "KillTask", outcome: "failed" },
+        });
+        assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+      }
+      if (source === "direct")
+        yield* update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "background-command",
+          status: "completed",
+          rawOutput: { type: "Text", text: "DIRECT_DONE" },
+        });
+      else if (source === "structured") yield* complete();
+      else if (source === "monitor") yield* ended();
+      else
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "completion-poll",
+          kind: "other",
+          title: source === "kill-task" ? "kill" : "get_command_or_subagent_output",
+          status: "completed",
+          rawInput:
+            source === "kill-task"
+              ? { variant: "KillTask", task_id: taskId }
+              : { variant: "TaskOutput", task_ids: [taskId] },
+          rawOutput:
+            source === "kill-task"
+              ? { type: "KillTask", outcome: "killed" }
+              : {
+                  type: "TaskOutput",
+                  Result: {
+                    task_id: taskId,
+                    status: "completed",
+                    exit_code: 0,
+                    output: "BACKGROUND_DONE\n",
+                  },
+                },
+        });
+      assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+      // Different authoritative channels and a replayed ACK cannot reopen or duplicate the result.
+      yield* complete();
+      yield* update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "background-command",
+        status: "in_progress",
+      });
+      yield* update({
+        sessionUpdate: "tool_call",
+        toolCallId: "background-fence",
+        kind: "other",
+        title: "Fence",
+        status: "completed",
+      });
+      const lateEvents = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "background-fence",
+          ),
+          Stream.runCollect,
+        ),
+      );
+      const terminals = lateEvents.filter(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === "background-command",
+      );
+      assert.lengthOf(terminals, 1);
+      const item = terminals[0]!;
+      if (item.type === "turn_item.updated") {
+        assert.equal(item.turnItem.providerTurnId, firstTerminal.providerTurnId);
+        assert.equal(item.turnItem.status, "completed");
+        assert.isNotNull(item.turnItem.completedAt);
+      }
+      assert.isFalse(lateEvents.some((event) => event.type === "subagent.updated"));
+      assert.isFalse(lateEvents.some((event) => event.type === "turn.terminal"));
+      assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+      yield* Deferred.succeed(finishNext, { stopReason: "end_turn" });
+      yield* runtime.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+      );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.live.each(["cancelled", "failed", "end_turn"] as const)(
     "settles unfinished ACP tools only for confirmed %s outcomes",
     (outcome) =>

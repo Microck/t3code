@@ -11,8 +11,8 @@ const fixes: ReadonlyArray<{
   readonly label?: string;
 }> = [
   // This rebased copy preserves upstream's deletion of the obsolete web test.
-  { pr: 22466, commit: "31eedc68ec4b19eda53ee6727dcef612b6e9de13" },
-  { pr: 22842, commit: "6050ba8a94ceede9dce690a7ccfe34b85787240f" },
+  { pr: 22466, commit: "f5ae110db9f1914938047009aee7db8d3b62bc66" },
+  { pr: 22842, commit: "d050d986b0867656ba4c7390d84eb53076d2c4c6" },
   // Includes the activation-preference prerequisite needed for one resume after Stop.
   { pr: 21439, commit: "66710506e8f4c710d0a6762a25da4c8fcdae0c49" },
   { pr: 21323, commit: "60250740480898e75cb5cd75630fe38faedd2f4d" },
@@ -21,7 +21,7 @@ const fixes: ReadonlyArray<{
   { pr: 21066, commit: "3dc6f65b586484d14b9eb94aef6b8eb60e5bef03" },
   { pr: 21770, commit: "669a88a2f2f15692ec2fdb9a70b0f12b23991d86" },
   { pr: 21801, commit: "4ec8ea9941de082bf30847e4f4b6237f63229f5c" },
-  { pr: 22972, commit: "35db61ab56c026cecc72dd07f7eafc7a2ffa09c5" },
+  { pr: 22972, commit: "c18c9f96e647283691d00ee3b05c96734f5d97de" },
   { pr: 26403, commit: "0a0f9e069605a862fb4db486e7a81a916b1b3691" },
   {
     commit: "ef97de218b54c8832a894b80b3e2839ee7391210",
@@ -32,7 +32,7 @@ const fixes: ReadonlyArray<{
     label: "Native OMP task progress on web, desktop and mobile",
   },
   {
-    commit: "ff8d673a4403b336c04b733f4677b0dc9992c39d",
+    commit: "89fdbbc27330a53d7bc282823f42f33ea2615e62",
     label: "OMP model family logos and reported completion estimates",
   },
   {
