@@ -10449,18 +10449,20 @@ describe("AcpAdapterV2", () => {
         let backgroundItem: ProviderAdapter.ProviderAdapterV2Event | undefined;
         let checkpoint = 0;
         const assertCommand = Effect.fnUntraced(function* (expectedStatus: string, output: string) {
-          const title = `Checkpoint ${++checkpoint}`;
-          // A later tool event fences the emitted updates without waiting for a terminal that may never come.
-          yield* update({ sessionUpdate: "tool_call_update", toolCallId: "blocker", title });
+          const checkpointId = `checkpoint-${++checkpoint}`;
+          // A separate completed tool fences updates even when normalization replaces its title.
+          yield* update({
+            sessionUpdate: "tool_call",
+            toolCallId: checkpointId,
+            title: "Checkpoint",
+            kind: "other",
+            status: "completed",
+          });
           while (true) {
             const event = yield* Queue.take(events);
             if (event.type !== "turn_item.updated") continue;
             if (event.turnItem.nativeItemRef?.nativeId === "early") backgroundItem = event;
-            if (
-              event.turnItem.nativeItemRef?.nativeId === "blocker" &&
-              event.turnItem.title === title
-            )
-              break;
+            if (event.turnItem.nativeItemRef?.nativeId === checkpointId) break;
           }
           assert.equal(backgroundItem?.type, "turn_item.updated");
           if (backgroundItem?.type !== "turn_item.updated") return;
