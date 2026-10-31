@@ -12,7 +12,7 @@ type SlashSearchItem = Extract<
   { type: "slash-command" | "provider-slash-command" | "skill" }
 >;
 
-/** Provider commands, `/side`, `/btw` and `/clear` work only at the message start. */
+/** Ordinary provider commands, `/side`, `/btw` and `/clear` must open the message; advertised skills can appear inline. */
 export function slashCommandItemsForPromptPosition(
   items: ReadonlyArray<SlashSearchItem>,
   isAtPromptStart: boolean,
@@ -26,7 +26,8 @@ export function slashCommandItemsForPromptPosition(
       (item.type === "slash-command" &&
         item.command !== "side" &&
         item.command !== "btw" &&
-        item.command !== "clear"),
+        item.command !== "clear") ||
+      (item.type === "provider-slash-command" && item.command.name.startsWith("skill:")),
   );
 }
 
