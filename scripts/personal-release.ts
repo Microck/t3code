@@ -12,7 +12,7 @@ const fixes: ReadonlyArray<{
 }> = [
   // This rebased copy preserves upstream's deletion of the obsolete web test.
   { pr: 22466, commit: "31eedc68ec4b19eda53ee6727dcef612b6e9de13" },
-  { pr: 22842, commit: "095e6983e35b83571c77dd5397dd738183b8b212" },
+  { pr: 22842, commit: "f641d755a1566ff975f8632e97c9501b817c2883" },
   // Includes the activation-preference prerequisite needed for one resume after Stop.
   { pr: 21439, commit: "66710506e8f4c710d0a6762a25da4c8fcdae0c49" },
   { pr: 21323, commit: "60250740480898e75cb5cd75630fe38faedd2f4d" },
@@ -90,6 +90,8 @@ const fixes: ReadonlyArray<{
     commit: "9bd52ed7c35fa173edd63e244264036ff40ae5bf",
     label: "Show published HTML boards when ACP tool wrappers hide their results",
   },
+  // Command-label normalization must not hide the Grok regression test checkpoint.
+  { commit: "6e276dd3c685a41d096b52da13902dbefbe6dfbb" },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
