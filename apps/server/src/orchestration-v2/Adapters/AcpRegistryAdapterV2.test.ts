@@ -1484,9 +1484,10 @@ describe("AcpRegistryAdapterV2", () => {
         undefined,
         false,
       );
-      assert.isUndefined(
-        fallback.runtime.hasPendingBackgroundWork,
-        "an adapter without a continuation dispatcher must use ordinary prompt completion",
+      assert.isDefined(fallback.runtime.hasPendingBackgroundWork);
+      assert.isFalse(
+        yield* fallback.runtime.hasPendingBackgroundWork!,
+        "without retained RPC work the generic probe must not change ordinary idle release",
       );
       yield* fallback.runtime.startTurn(fallback.turnInput(1));
       const completed = yield* fallback.until((event) => event.type === "turn.terminal");
@@ -2432,6 +2433,8 @@ describe("registry confirmed Stop after RPC failure", () => {
         assert.equal(terminal?.status, "failed");
         if (terminal === undefined) return assert.fail("expected failed turn");
         const providerTurnId = terminal.providerTurnId;
+        assert.isDefined(runtime.hasPendingBackgroundWork);
+        assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
         assert.lengthOf(children, settings.agentId === "devin" ? 2 : 1);
         for (const child of children) assert.isTrue(yield* child.isRunning);
         yield* runtime.interruptTurn({
@@ -2443,6 +2446,7 @@ describe("registry confirmed Stop after RPC failure", () => {
           yield* Effect.ignore(child.exitCode);
           assert.isFalse(yield* child.isRunning);
         }
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
         const stopped = Array.from(
           yield* runtime.events.pipe(
             Stream.takeUntil(

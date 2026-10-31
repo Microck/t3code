@@ -1631,6 +1631,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const activeTurn = yield* Ref.make<ActiveAcpTurn | null>(null);
         // A failed RPC cannot confirm that a command stopped. Keep its original event owner.
         const retainedRpcTools = new Map<string, ActiveAcpTurn>();
+        const retainedRpcSubagents = new WeakSet<ActiveAcpSubagent>();
         const retainedRpcTerminalIds = new Map<string, Set<string>>();
         const settledRpcTools = new Set<string>();
         let pendingStopCloseTurn: ActiveAcpTurn | null = null;
@@ -1968,6 +1969,23 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         // signals can still flip the original turn items instead of leaving
         // them running forever.
         const carryoverSubagents = yield* Ref.make<AcpCarryoverSubagents | null>(null);
+        const hasRetainedRpcWork = Effect.gen(function* () {
+          if (retainedRpcTools.size > 0) return true;
+          const isRetained = (subagent: ActiveAcpSubagent) =>
+            retainedRpcSubagents.has(subagent) && acpSubagentHasPendingBackgroundWork(subagent);
+          const active = yield* Ref.get(activeTurn);
+          if (active !== null && [...active.subagents.values()].some(isRetained)) return true;
+          const carryover = yield* Ref.get(carryoverSubagents);
+          return carryover?.subagents.some(isRetained) ?? false;
+        });
+        const assertSessionCanBeReplaced = Effect.gen(function* () {
+          if ((yield* Ref.get(activeTurn)) !== null || (yield* hasRetainedRpcWork)) {
+            return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+              driver,
+              detail: "Stop active or retained background work before switching ACP sessions.",
+            });
+          }
+        });
         const handledBackgroundTaskIdsInActiveTurn = yield* Ref.make<ReadonlySet<string>>(
           new Set(),
         );
@@ -4699,11 +4717,46 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   ),
             );
 
+        const emitToolContentChunk = Effect.fnUntraced(function* (
+          context: ActiveAcpTurn,
+          update: Extract<
+            EffectAcpSchema.SessionNotification["update"],
+            { sessionUpdate: "tool_call_content_chunk" }
+          >,
+        ) {
+          const text =
+            update.content.type === "content"
+              ? acpContentBlockDisplayText(update.content.content)
+              : update.content.type === "diff"
+                ? "changes" in update.content
+                  ? update.content.patch?.text
+                  : update.content.newText
+                : undefined;
+          if (text !== undefined) {
+            const previous = context.tools.get(update.toolCallId) ?? {
+              toolCallId: update.toolCallId,
+              status: "inProgress" as const,
+              data: { toolCallId: update.toolCallId },
+            };
+            yield* emitTool(context, appendToolOutputText(previous, text));
+          }
+        });
+
         const handleSessionUpdate = Effect.fnUntraced(function* (
           notification: EffectAcpSchema.SessionNotification,
         ) {
           const context = yield* Ref.get(activeTurn);
           const update = notification.update;
+          if (update.sessionUpdate === "tool_call_content_chunk") {
+            const key = sessionScopedId(notification.sessionId, update.toolCallId);
+            if (settledRpcTools.has(key)) return;
+            const owner = retainedRpcTools.get(key);
+            if (owner !== undefined) {
+              if (!(yield* Ref.get(stoppedRunQuarantine)))
+                yield* emitToolContentChunk(owner, update);
+              return;
+            }
+          }
           if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
             const key = sessionScopedId(notification.sessionId, update.toolCallId);
             const owner = retainedRpcTools.get(key);
@@ -5168,22 +5221,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               break;
             }
             case "tool_call_content_chunk": {
-              const text =
-                update.content.type === "content"
-                  ? acpContentBlockDisplayText(update.content.content)
-                  : update.content.type === "diff"
-                    ? "changes" in update.content
-                      ? update.content.patch?.text
-                      : update.content.newText
-                    : undefined;
-              if (text !== undefined) {
-                const previous = context.tools.get(update.toolCallId) ?? {
-                  toolCallId: update.toolCallId,
-                  status: "inProgress" as const,
-                  data: { toolCallId: update.toolCallId },
-                };
-                yield* emitTool(context, appendToolOutputText(previous, text));
-              }
+              yield* emitToolContentChunk(context, update);
               break;
             }
             case "compaction_summary_chunk": {
@@ -6623,6 +6661,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             replacement: AcpSessionRuntime.AcpSessionRuntimeStartResult,
           ) => Effect.Effect<void>,
         ) {
+          yield* assertSessionCanBeReplaced;
           const previousScope = runtimeScope;
           const previousGeneration = yield* Ref.get(runtimeCallbackGeneration);
           yield* runtimeCallbackPermit.withPermit(awaitAdmittedNativeResponses);
@@ -6826,6 +6865,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           sessionId: string,
           threadId: ThreadId | null,
         ) {
+          if ((yield* Ref.get(activeSessionId)) !== sessionId) yield* assertSessionCanBeReplaced;
           const initialFailure = yield* Ref.modify(initialSessionActivationFailure, (failure) =>
             failure?.sessionId === sessionId ? [failure.error, null] : [undefined, failure],
           );
@@ -7267,6 +7307,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             !runtimeTerminated &&
             !directStopQuarantine
           ) {
+            for (const subagent of context.subagents.values()) {
+              if (acpSubagentHasPendingBackgroundWork(subagent)) retainedRpcSubagents.add(subagent);
+            }
             for (const tool of context.tools.values()) {
               const status = toolStatus(tool.status);
               if (status !== "pending" && status !== "running" && status !== "waiting") continue;
@@ -7612,12 +7655,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 reason: "previous_turn_active",
               });
             }
+            const requestedSessionId = yield* nativeThreadId(driver, turnInput.providerThread);
+            if ((yield* Ref.get(activeSessionId)) !== requestedSessionId)
+              yield* assertSessionCanBeReplaced;
             useProviderThreadIdentity(turnInput.providerThread);
             // Session activation can itself invoke client fs/terminal methods.
             // Install the incoming thread policy before load/resume so those
             // requests can never inherit the previously active thread's policy.
             latestRuntimePolicy = turnInput.runtimePolicy;
-            const requestedSessionId = yield* nativeThreadId(driver, turnInput.providerThread);
+
             const restartAfterInterrupt = yield* restartRuntimeAfterTeardownIfRequired(
               turnInput.threadId,
               requestedSessionId,
@@ -8136,7 +8182,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   return false;
                 }),
               }
-            : {}),
+            : { hasPendingBackgroundWork: hasRetainedRpcWork }),
           ensureThread: Effect.fn("AcpAdapterV2.ensureThread")(
             function* (threadInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput) {
               const now = yield* DateTime.now;
@@ -8184,6 +8230,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 Effect.gen(function* () {
                   yield* awaitRuntimeTeardown();
                   const sessionId = yield* nativeThreadId(driver, threadInput.providerThread);
+                  if ((yield* Ref.get(activeSessionId)) !== sessionId)
+                    yield* assertSessionCanBeReplaced;
                   const previousItemIdentityVersion = itemIdentityVersion;
                   useProviderThreadIdentity(threadInput.providerThread);
                   const restorePreviousItemIdentity = Effect.sync(() => {
@@ -8651,11 +8699,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               return yield* runtimeTransitionPermit.withPermit(
                 Effect.gen(function* () {
                   yield* awaitRuntimeTeardown();
+                  const sessionId = yield* nativeThreadId(driver, snapshotInput.providerThread);
+                  if ((yield* Ref.get(activeSessionId)) !== sessionId)
+                    yield* assertSessionCanBeReplaced;
                   useProviderThreadIdentity(snapshotInput.providerThread);
                   yield* restartRuntimeAfterTeardownIfRequired(
                     snapshotInput.providerThread.appThreadId,
                   );
-                  const sessionId = yield* nativeThreadId(driver, snapshotInput.providerThread);
+
                   if ((yield* Ref.get(activeSessionId)) !== sessionId) {
                     if (!capabilities.threads.canReadThreadSnapshot) {
                       return yield* new ProviderAdapter.ProviderAdapterProtocolError({
@@ -8731,6 +8782,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     });
                   }
                   yield* awaitRuntimeTeardown();
+                  yield* assertSessionCanBeReplaced;
                   itemIdentityVersion = 2;
                   prepareTerminalEnvironment(
                     yield* readMcpContext(rollbackInput.providerThread.appThreadId),
@@ -8815,6 +8867,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               return yield* runtimeTransitionPermit.withPermit(
                 Effect.gen(function* () {
                   yield* awaitRuntimeTeardown();
+                  yield* assertSessionCanBeReplaced;
                   useProviderThreadIdentity(forkInput.sourceProviderThread);
                   yield* restartRuntimeAfterTeardownIfRequired(
                     forkInput.sourceProviderThread.appThreadId,
