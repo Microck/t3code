@@ -1,5 +1,11 @@
 import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
-import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  MessageId,
+  ThreadId,
+  ProviderDriverKind,
+  type AssistantCitation,
+} from "@t3tools/contracts";
 import {
   collectAssistantCitations,
   expandAssistantCitationsForProvider,
@@ -562,5 +568,22 @@ describe("side chat slash commands", () => {
     expect(slashCommandItemsForPromptPosition(items, false).map((item) => item.id)).toEqual([
       "slash:plan",
     ]);
+  });
+});
+
+describe("advertised provider skill positions", () => {
+  it("offers advertised skills inline without reopening ordinary provider commands", () => {
+    const items = ["skill:review", "review"].map((name) => ({
+      id: `provider:${name}`,
+      type: "provider-slash-command" as const,
+      provider: ProviderDriverKind.make("codex"),
+      command: { name, description: "Review" },
+      label: `/${name}`,
+      description: "Review",
+    }));
+    expect(slashCommandItemsForPromptPosition(items, false).map((item) => item.id)).toEqual([
+      "provider:skill:review",
+    ]);
+    expect(slashCommandItemsForPromptPosition(items, true)).toEqual(items);
   });
 });
