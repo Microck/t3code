@@ -12,7 +12,7 @@ const fixes: ReadonlyArray<{
 }> = [
   // This rebased copy preserves upstream's deletion of the obsolete web test.
   { pr: 22466, commit: "31eedc68ec4b19eda53ee6727dcef612b6e9de13" },
-  { pr: 22842, commit: "f641d755a1566ff975f8632e97c9501b817c2883" },
+  { pr: 22842, commit: "1b3591add5f282afaf1e1231fe18f72f97712777" },
   // Includes the activation-preference prerequisite needed for one resume after Stop.
   { pr: 21439, commit: "66710506e8f4c710d0a6762a25da4c8fcdae0c49" },
   { pr: 21323, commit: "60250740480898e75cb5cd75630fe38faedd2f4d" },

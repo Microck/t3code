@@ -7037,12 +7037,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
           if (settledStatus === "completed") {
             yield* terminalizeOpenForegroundTools(context);
-          } else {
-            // Provider-side cancellation and prompt failures may omit final tool updates.
-            // Close their run-owned items before settlement so they cannot become phantom work.
+          } else if (settledStatus !== "failed") {
+            // Provider-side cancellation may omit final tool updates.
             yield* terminalizeOpenRunOwnedItems(context, {
               terminalizeSubagents: directStopQuarantine,
-              toolStatus: settledStatus === "failed" ? "failed" : "interrupted",
+              toolStatus: "interrupted",
             });
           }
           yield* closeTextStreams(context);
