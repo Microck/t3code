@@ -4181,7 +4181,7 @@ describe("AcpAdapterV2", () => {
               })
               .pipe(Effect.exit),
           ];
-          assert.isTrue(rejected.every(Exit.isFailure));
+          assert.isTrue(rejected.every((result) => result._tag === "Failure"));
           assert.lengthOf(runtimeInputs, 1);
           const requests = Array.from(yield* Queue.takeBetween(protocolEvents, 0, 256)).filter(
             (event) =>
