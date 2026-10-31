@@ -3107,7 +3107,8 @@ describe("AcpAdapterV2", () => {
         const final = recovered.find(
           (event) => event.type === "turn.terminal" && event.providerTurnId !== secondId,
         );
-        assert.equal(final?.status, "completed");
+        if (final?.type !== "turn.terminal") return assert.fail("missing recovered terminal");
+        assert.equal(final.status, "completed");
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
