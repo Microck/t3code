@@ -24,7 +24,7 @@ const fixes: ReadonlyArray<{
   { pr: 22972, commit: "35db61ab56c026cecc72dd07f7eafc7a2ffa09c5" },
   { pr: 26403, commit: "0a0f9e069605a862fb4db486e7a81a916b1b3691" },
   {
-    commit: "dfe85271044c301f8403edfe436213b73d272f39",
+    commit: "ef97de218b54c8832a894b80b3e2839ee7391210",
     label: "OMP choices and custom answers in one question step",
   },
   {
@@ -40,7 +40,7 @@ const fixes: ReadonlyArray<{
     label: "Native OMP wait jobs displayed as subagent status rows",
   },
   {
-    commit: "9561d1b51e57213a13d94c728521da76a164d2ef",
+    commit: "d16a95c2b8b6b1517847f8694f820f0393997598",
     label: "Distribution-aware remote update checks",
   },
   {
