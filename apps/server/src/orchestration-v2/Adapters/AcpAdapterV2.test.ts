@@ -3755,6 +3755,297 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.live.each(["tool", "terminal", "synthetic"] as const)(
+    "routes retained RPC commands through %s events to their original turn without duplicate terminals",
+    (transport) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+        let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+        const firstStarted = yield* Deferred.make<void>();
+        const failFirst = yield* Deferred.make<void>();
+        const secondStarted = yield* Deferred.make<void>();
+        const finishSecond = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
+        let prompts = 0;
+        const instanceId = ProviderInstanceId.make("rpc-late-tools");
+        const threadId = ThreadId.make("thread-rpc-late-tools");
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          selfInvocation: yield* resolveSelfInvocation(),
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+              mockAgentPath: yield* path.fromFileUrl(
+                new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+              ),
+              wrapRuntime: (runtime) => ({
+                ...runtime,
+                handleSessionUpdate: (handler) =>
+                  Effect.sync(() => {
+                    sessionUpdateHandler = handler;
+                  }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+                prompt: () =>
+                  Effect.gen(function* () {
+                    if (++prompts === 1) {
+                      yield* Deferred.succeed(firstStarted, undefined);
+                      yield* Deferred.await(failFirst);
+                      return yield* EffectAcpErrors.AcpRequestError.internalError(
+                        "RPC ended before its commands",
+                      );
+                    }
+                    yield* Deferred.succeed(secondStarted, undefined);
+                    return yield* Deferred.await(finishSecond);
+                  }),
+              }),
+            }),
+          },
+        });
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("session-rpc-late-tools"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime
+          .startTurn(
+            makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(firstStarted);
+        assert.isDefined(sessionUpdateHandler);
+        const update = (update: EffectAcpSchema.SessionUpdate, sessionId = "mock-session-1") =>
+          sessionUpdateHandler!({ sessionId, update });
+        const nativeCommandId = (id: string) =>
+          transport === "synthetic" ? `acp-agent-terminal:${id}-terminal` : id;
+        for (const id of ["rpc-command-one", "rpc-command-two"]) {
+          if (transport === "synthetic") {
+            yield* update({
+              sessionUpdate: "terminal_update",
+              terminalId: id + "-terminal",
+              command: id,
+            });
+            continue;
+          }
+          yield* update({
+            sessionUpdate: "tool_call",
+            toolCallId: id,
+            title: id,
+            kind: "execute",
+            status: "in_progress",
+            rawInput: { command: id },
+            ...(transport === "terminal"
+              ? { content: [{ type: "terminal" as const, terminalId: id + "-terminal" }] }
+              : {}),
+          });
+        }
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "rpc-read",
+          title: "Read",
+          kind: "read",
+          status: "in_progress",
+        });
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "rpc-wait",
+          title: "Wait",
+          kind: "other",
+          status: "pending",
+        });
+        yield* Deferred.succeed(failFirst, undefined);
+        const firstEvents = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runCollect,
+          ),
+        );
+        const firstTerminal = firstEvents.find((event) => event.type === "turn.terminal");
+        assert.equal(firstTerminal?.type, "turn.terminal");
+        if (firstTerminal?.type !== "turn.terminal") return;
+        assert.equal(firstTerminal.status, "failed");
+        if (firstTerminal.status === "failed") assert.equal(firstTerminal.childTurnsContinue, true);
+        for (const id of ["rpc-read", "rpc-wait"]) {
+          const last = firstEvents.findLast(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.nativeItemRef?.nativeId === id,
+          );
+          assert.equal(last?.type, "turn_item.updated");
+          if (last?.type === "turn_item.updated") assert.equal(last.turnItem.status, "failed");
+        }
+        assert.isUndefined(runtime.hasPendingBackgroundWork);
+        if (transport !== "tool") {
+          yield* update({
+            sessionUpdate: "terminal_output_chunk",
+            terminalId: "rpc-command-one-terminal",
+            data: Buffer.from("DONE").toString("base64"),
+          });
+          yield* update({
+            sessionUpdate: "terminal_update",
+            terminalId: "rpc-command-one-terminal",
+            exitStatus: { exitCode: 0 },
+          });
+        }
+
+        yield* runtime
+          .startTurn(
+            makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 2 }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(secondStarted);
+        if (transport === "synthetic") {
+          yield* update({
+            sessionUpdate: "tool_call",
+            toolCallId: "late-embedding",
+            kind: "execute",
+            title: "Late terminal reference",
+            status: "in_progress",
+            content: [{ type: "terminal", terminalId: "rpc-command-two-terminal" }],
+          });
+        }
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "new-turn-read",
+          title: "Read new turn",
+          kind: "read",
+          status: "in_progress",
+        });
+        if (transport !== "tool") {
+          yield* update({
+            sessionUpdate: "terminal_update",
+            terminalId: "rpc-command-one-terminal",
+            exitStatus: { exitCode: 0 },
+          });
+          yield* update({
+            sessionUpdate: "terminal_update",
+            terminalId: "rpc-command-one-terminal",
+            exitStatus: null,
+          });
+          yield* update({
+            sessionUpdate: "terminal_output_chunk",
+            terminalId: "rpc-command-one-terminal",
+            data: Buffer.from("DUPLICATE").toString("base64"),
+          });
+          yield* update(
+            {
+              sessionUpdate: "terminal_update",
+              terminalId: "rpc-command-two-terminal",
+              exitStatus: { exitCode: 0 },
+            },
+            "different-session",
+          );
+          yield* update({
+            sessionUpdate: "terminal_output_chunk",
+            terminalId: "rpc-command-two-terminal",
+            data: Buffer.from("SECOND DONE").toString("base64"),
+          });
+          yield* update({
+            sessionUpdate: "terminal_update",
+            terminalId: "rpc-command-two-terminal",
+            exitStatus: { exitCode: 0 },
+          });
+        } else {
+          yield* update({
+            sessionUpdate: "tool_call_update",
+            toolCallId: "rpc-command-one",
+            status: "completed",
+            rawOutput: "DONE",
+          });
+          yield* update({
+            sessionUpdate: "tool_call_update",
+            toolCallId: "rpc-command-one",
+            status: "completed",
+            rawOutput: "DUPLICATE",
+          });
+          yield* update({
+            sessionUpdate: "tool_call_update",
+            toolCallId: "rpc-command-one",
+            status: "in_progress",
+          });
+          yield* update(
+            {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "rpc-command-two",
+              status: "completed",
+              rawOutput: "WRONG SESSION",
+            },
+            "different-session",
+          );
+          yield* update({
+            sessionUpdate: "tool_call_update",
+            toolCallId: "rpc-command-two",
+            status: "completed",
+            rawOutput: "SECOND DONE",
+          });
+        }
+        const lateEvents = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.nativeItemRef?.nativeId === nativeCommandId("rpc-command-two") &&
+                event.turnItem.status === "completed",
+            ),
+            Stream.runCollect,
+          ),
+        );
+        const completions = lateEvents.filter(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === nativeCommandId("rpc-command-one") &&
+            event.turnItem.status === "completed",
+        );
+        assert.lengthOf(completions, 1);
+        for (const event of lateEvents) {
+          if (event.type !== "turn_item.updated") continue;
+          const id = event.turnItem.nativeItemRef?.nativeId;
+          if (
+            id === nativeCommandId("rpc-command-one") ||
+            id === nativeCommandId("rpc-command-two")
+          ) {
+            assert.equal(event.turnItem.providerTurnId, firstTerminal.providerTurnId);
+            assert.include(["running", "completed"], event.turnItem.status);
+            if (event.turnItem.status === "completed") assert.isNotNull(event.turnItem.completedAt);
+            if (event.turnItem.type === "command_execution")
+              assert.notInclude(event.turnItem.output ?? "", "WRONG SESSION");
+          }
+          if (id === "new-turn-read")
+            assert.notEqual(event.turnItem.providerTurnId, firstTerminal.providerTurnId);
+        }
+        assert.lengthOf(
+          lateEvents.filter((event) => event.type === "turn.terminal"),
+          0,
+        );
+
+        yield* Deferred.succeed(finishSecond, { stopReason: "end_turn" });
+        const secondEvents = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runCollect,
+          ),
+        );
+        const secondTerminal = secondEvents.find((event) => event.type === "turn.terminal");
+        assert.equal(secondTerminal?.type, "turn.terminal");
+        if (secondTerminal?.type === "turn.terminal") {
+          assert.equal(secondTerminal.status, "completed");
+          assert.notEqual(secondTerminal.providerTurnId, firstTerminal.providerTurnId);
+        }
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.live.each(["cancelled", "failed", "end_turn"] as const)(
     "settles unfinished ACP tools only for confirmed %s outcomes",
     (outcome) =>
@@ -3839,10 +4130,9 @@ describe("AcpAdapterV2", () => {
           assert.equal(lastWait.turnItem.type, "dynamic_tool");
           assert.equal(
             lastWait.turnItem.status,
-            outcome === "failed" ? "pending" : lastTool?.status,
+            outcome === "failed" ? "failed" : lastTool?.status,
           );
-          if (outcome === "failed") assert.isNull(lastWait.turnItem.completedAt);
-          else assert.isNotNull(lastWait.turnItem.completedAt);
+          assert.isNotNull(lastWait.turnItem.completedAt);
         }
         assert.equal(
           events.find((event) => event.type === "turn.terminal")?.status,

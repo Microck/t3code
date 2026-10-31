@@ -1619,6 +1619,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           input.runtimePolicy;
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         const activeTurn = yield* Ref.make<ActiveAcpTurn | null>(null);
+        // A failed RPC cannot confirm that a command stopped. Keep its original event owner.
+        const retainedRpcTools = new Map<string, ActiveAcpTurn>();
+        const retainedRpcTerminalIds = new Map<string, Set<string>>();
+        const settledRpcTools = new Set<string>();
         let pendingStopCloseTurn: ActiveAcpTurn | null = null;
         let followsAgentWorkState = false;
         let agentWork: Extract<
@@ -1659,6 +1663,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           agentWork = null;
           agentRequests.clear();
           nativeChildren.clear();
+          retainedRpcTools.clear();
+          retainedRpcTerminalIds.clear();
+          settledRpcTools.clear();
           yield* Ref.set(activeSessionSetup, setup);
         });
         const activeSelection = yield* Ref.make<ModelSelection | null>(null);
@@ -4460,7 +4467,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const terminalKey = sessionScopedId(notification.sessionId, update.terminalId);
           const next = applyAcpAgentTerminalUpdate(agentTerminalsById.get(terminalKey), update);
           agentTerminalsById.set(terminalKey, next);
-          if (context === null || notification.sessionId !== context.nativeThreadId) return true;
           const status =
             next.exitStatus === undefined
               ? ("inProgress" as const)
@@ -4468,12 +4474,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 ? ("completed" as const)
                 : ("failed" as const);
           const embeddedToolCallIds = toolCallIdsByAgentTerminalId.get(terminalKey);
+          const retainedIds = retainedRpcTerminalIds.get(terminalKey);
           const projectedToolCallIds =
-            embeddedToolCallIds === undefined || embeddedToolCallIds.size === 0
-              ? [`acp-agent-terminal:${update.terminalId}`]
-              : [...embeddedToolCallIds];
+            retainedIds !== undefined
+              ? [...retainedIds]
+              : embeddedToolCallIds === undefined || embeddedToolCallIds.size === 0
+                ? [`acp-agent-terminal:${update.terminalId}`]
+                : [...embeddedToolCallIds];
           for (const toolCallId of projectedToolCallIds) {
-            const existing = context.tools.get(toolCallId);
+            const key = sessionScopedId(notification.sessionId, toolCallId);
+            if (settledRpcTools.has(key)) continue;
+            const retainedOwner = retainedRpcTools.get(key);
+            const owner = retainedOwner ?? context;
+            if (owner === null || notification.sessionId !== owner.nativeThreadId) continue;
+            if (retainedOwner !== undefined && (yield* Ref.get(stoppedRunQuarantine))) continue;
+            const existing = owner.tools.get(toolCallId);
+            if (retainedOwner !== undefined && existing === undefined) continue;
             const seeded: AcpToolCallState =
               existing ??
               ({
@@ -4485,7 +4501,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 data: { toolCallId },
               } satisfies AcpToolCallState);
             yield* emitTool(
-              context,
+              owner,
               setToolOutputText(
                 {
                   ...seeded,
@@ -4495,6 +4511,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 next.output,
               ),
             );
+            if (retainedOwner !== undefined && status !== "inProgress") {
+              retainedRpcTools.delete(key);
+              settledRpcTools.add(key);
+            }
           }
           return true;
         });
@@ -4525,6 +4545,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   }),
                 ) ?? makeProviderFailure({ message: work.error?.message, class: "provider_error" }))
               : undefined;
+          if (failure !== undefined) yield* terminalizeOpenForegroundTools(context, "failed");
           yield* finalizeTurn(
             context,
             failure !== undefined
@@ -4589,6 +4610,25 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         ) {
           const context = yield* Ref.get(activeTurn);
           const update = notification.update;
+          if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+            const key = sessionScopedId(notification.sessionId, update.toolCallId);
+            const owner = retainedRpcTools.get(key);
+            if (settledRpcTools.has(key)) return;
+            if (owner !== undefined) {
+              if (yield* Ref.get(stoppedRunQuarantine)) return;
+              for (const event of parseSessionUpdateEvent(notification).events) {
+                if (event._tag !== "ToolCallUpdated") continue;
+                yield* emitTool(owner, event.toolCall);
+                const tool = owner.tools.get(event.toolCall.toolCallId);
+                const status = tool === undefined ? undefined : toolStatus(tool.status);
+                if (status === "completed" || status === "failed") {
+                  retainedRpcTools.delete(key);
+                  settledRpcTools.add(key);
+                }
+              }
+              return;
+            }
+          }
           if (
             followsAgentWorkState &&
             flavor.extractSubagentSessionEvent !== undefined &&
@@ -6987,11 +7027,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 
         const terminalizeOpenForegroundTools = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
+          status: "completed" | "failed" = "completed",
         ) {
           for (const tool of context.tools.values()) {
             if (!acpCompletedTurnShouldTerminalizeTool(tool, { ...flavor, extractSubagentUpdate }))
               continue;
-            yield* emitTool(context, tool, "completed");
+            yield* emitTool(context, tool, status);
           }
         });
 
@@ -7000,6 +7041,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             Effect.gen(function* () {
               yield* Ref.update(continuationGeneration, (value) => value + 1);
               yield* Ref.set(stoppedRunQuarantine, true);
+              for (const key of retainedRpcTools.keys()) settledRpcTools.add(key);
+              retainedRpcTools.clear();
               yield* Ref.set(wakeBuffer, []);
               yield* Ref.set(wakeReports, noWakeReports);
               yield* Ref.set(continuationRequested, false);
@@ -7015,12 +7058,61 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context: ActiveAcpTurn,
           status: "completed" | "interrupted" | "failed" | "cancelled",
           failure?: OrchestrationV2ProviderFailure,
+          options?: { readonly retainRpcTools?: boolean },
         ): Effect.fn.Return<void> {
           if (context.finalized) return;
           const settledStatus = context.interrupted ? "interrupted" : status;
           context.finalizedStatus = settledStatus;
           context.finalized = true;
           const directStopQuarantine = yield* Ref.get(stoppedRunQuarantine);
+          const survivingRpcChildren =
+            options?.retainRpcTools === true &&
+            ([...context.subagents.values()].some((subagent) =>
+              acpSubagentStatusBlocksTurnSettlement(subagent.task.status),
+            ) ||
+              [...context.toolCallIdsByBackgroundTaskId.values()].some((id) => {
+                const tool = context.tools.get(id);
+                const state = tool === undefined ? undefined : toolStatus(tool.status);
+                return state === "pending" || state === "running";
+              }));
+          let retainedRpcWork = false;
+          if (
+            settledStatus === "failed" &&
+            options?.retainRpcTools === true &&
+            !directStopQuarantine
+          ) {
+            for (const tool of context.tools.values()) {
+              const status = toolStatus(tool.status);
+              if (status !== "pending" && status !== "running" && status !== "waiting") continue;
+              const independent = flavor.extractBackgroundTaskId?.(tool) !== undefined;
+              const processCapable =
+                tool.kind === "execute" ||
+                tool.command !== undefined ||
+                unknownRecord(tool.data.rawInput)?.variant === "monitor";
+              if (extractSubagentUpdate(tool) !== undefined) continue;
+              if (processCapable || independent) {
+                retainedRpcTools.set(
+                  sessionScopedId(context.nativeThreadId, tool.toolCallId),
+                  context,
+                );
+                const key = sessionScopedId(context.nativeThreadId, tool.toolCallId);
+                const terminalIds =
+                  embeddedTerminalsByToolCallId.get(key)?.terminalIds ??
+                  (tool.toolCallId.startsWith("acp-agent-terminal:")
+                    ? [tool.toolCallId.slice("acp-agent-terminal:".length)]
+                    : []);
+                for (const terminalId of terminalIds) {
+                  const terminalKey = sessionScopedId(context.nativeThreadId, terminalId);
+                  const ids = retainedRpcTerminalIds.get(terminalKey) ?? new Set<string>();
+                  ids.add(tool.toolCallId);
+                  retainedRpcTerminalIds.set(terminalKey, ids);
+                }
+                retainedRpcWork = true;
+              } else {
+                yield* emitTool(context, tool, "failed");
+              }
+            }
+          }
           if (flavor.subagentsIdleOnTurnCompletion === true) {
             for (const subagent of context.subagents.values()) {
               if (!acpSubagentStatusBlocksTurnSettlement(subagent.task.status)) continue;
@@ -7129,9 +7221,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     `terminal-failure:${context.providerTurnId}`,
                   ),
                   status: settledStatus,
-                  ...(followsAgentWorkState &&
-                  rootSessionId !== null &&
-                  hasWorkingDescendant(rootSessionId)
+                  ...(retainedRpcWork ||
+                  survivingRpcChildren ||
+                  (followsAgentWorkState &&
+                    rootSessionId !== null &&
+                    hasWorkingDescendant(rootSessionId))
                     ? { childTurnsContinue: true }
                     : {}),
                   failure: failure ?? makeProviderFailure({ class: "provider_error" }),
@@ -7708,6 +7802,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                           cause: Cause.squash(cause),
                           class: "provider_error",
                         }),
+                      { retainRpcTools: true },
                     ).pipe(
                       Effect.andThen(
                         Effect.logWarning("orchestration-v2.acp-prompt-failed", {
@@ -7819,6 +7914,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           ...(postSettleContinuationEnabled || followsAgentWorkState
             ? {
                 hasPendingBackgroundWork: Effect.gen(function* () {
+                  if (retainedRpcTools.size > 0) return true;
                   const rootSessionId = yield* Ref.get(activeSessionId);
                   if (
                     followsAgentWorkState &&
