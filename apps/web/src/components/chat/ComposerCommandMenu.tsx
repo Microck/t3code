@@ -39,6 +39,14 @@ import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation"
 export type ComposerCommandItem =
   | {
       id: string;
+      type: "model-mention";
+      instanceId: ProviderInstanceId;
+      model: string;
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
       type: "path";
       path: string;
       pathKind: ProjectEntry["kind"];
@@ -283,6 +291,7 @@ export function composerSuggestionOptionId(listId: string, itemId: string): stri
 }
 
 const LISTBOX_LABEL_BY_TRIGGER: Record<ComposerTriggerKind, string> = {
+  "model-mention": "OMP model suggestions",
   path: "Files and folders",
   "pull-request": "Pull requests",
   "slash-command": "Commands",

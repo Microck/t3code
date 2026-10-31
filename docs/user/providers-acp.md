@@ -85,6 +85,12 @@ Other settings the agent offers, such as reasoning effort or approval mode, appe
 composer's model picker, beside the model list, like they do for built-in providers. Models and options that change while an agent
 is running update the picker without waiting for another provider probe.
 
+For a local `omp acp` provider on web or desktop, type `^` at the start of a word anywhere in
+your prompt to browse that provider's models. Selecting one inserts its literal model mention,
+such as `^openai-codex/gpt-6.1-sol`, for OMP's native delegation. Your main model stays selected.
+Suggestions use the provider's current catalog, so models excluded by OMP's ACP configuration
+are not offered.
+
 ## Commands and skills
 
 Slash commands the agent provides appear under **Provider** in the `/` menu while a session is
