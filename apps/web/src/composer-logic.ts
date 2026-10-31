@@ -1,3 +1,4 @@
+import { isOmpProvider } from "@t3tools/client-runtime/state/provider-instance-display";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import type {
   AssistantCitation,
@@ -257,19 +258,7 @@ export function collapseExpandedComposerCursor(
 
 /** Local ACP commands have no registry agent ID; identify OMP by its executable, never its label. */
 export function supportsOmpModelMentions(instance: ProviderInstanceConfig | undefined): boolean {
-  if (instance?.driver !== "acpRegistry") return false;
-  const config = instance.config;
-  if (typeof config !== "object" || config === null) return false;
-  return (
-    "source" in config &&
-    config.source === "local" &&
-    "commandPath" in config &&
-    typeof config.commandPath === "string" &&
-    /^omp(?:\.exe|\.cmd|\.bat)?$/i.test(config.commandPath.split(/[\\/]/).at(-1) ?? "") &&
-    "commandArgs" in config &&
-    Array.isArray(config.commandArgs) &&
-    config.commandArgs[0] === "acp"
-  );
+  return isOmpProvider(instance);
 }
 
 export function searchComposerMentionModels(

@@ -1,3 +1,5 @@
+import { ProviderDriverKind } from "@t3tools/contracts";
+import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import {
   ompAgentMetrics,
   ompAgentStatus,
@@ -11,6 +13,13 @@ export function OmpTaskProgressDisplay({ progress }: { readonly progress: OmpTas
       {progress.agents.map((agent) => (
         <details key={agent.id} className="border-b border-border/40 pb-1 last:border-0">
           <summary className="cursor-pointer py-1 text-foreground select-none">
+            <ProviderInstanceIcon
+              driverKind={ProviderDriverKind.make("acpRegistry")}
+              displayName="OMP"
+              ompModel={agent.resolvedModelIdentity ?? agent.resolvedModel}
+              className="mr-1 inline-flex size-3 align-middle"
+              iconClassName="size-3"
+            />
             <span className="font-medium">{agent.id}</span>
             <span className="ml-2 text-muted-foreground">
               {agent.agent} · {ompAgentStatus(agent)}

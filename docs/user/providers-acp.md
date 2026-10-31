@@ -91,6 +91,16 @@ such as `^openai-codex/gpt-6.1-sol`, for OMP's native delegation. Your main mode
 Suggestions use the provider's current catalog, so models excluded by OMP's ACP configuration
 are not offered.
 
+OMP model selections and native task rows show the model family's logo when the
+model ID identifies OpenAI, Anthropic, Gemini or Grok. Unknown models keep the
+provider icon. This changes presentation only, not routing or the selected provider.
+
+Native OMP task rows show reported completion estimates as `running · ~42%`.
+The percentage is an agent estimate, not a measured fraction of work. OMP's
+completion probes currently run only in its interactive CLI, so ACP tasks usually
+have no estimate. T3 does not start probes or make extra model requests. Context
+token counts remain separate from task completion.
+
 ## Questions
 
 For local `omp acp` providers, each choice question includes a custom-answer
