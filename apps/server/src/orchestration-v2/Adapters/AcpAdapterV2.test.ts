@@ -2741,6 +2741,89 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.live("fences old client terminal handlers across native close and runtime replacement", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const path = yield* Path.Path;
+      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      const handlers: Array<Parameters<RuntimeService["handleCreateTerminal"]>[0]> = [];
+      const instanceId = ProviderInstanceId.make("acp-native-terminal-stop");
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        selfInvocation: yield* resolveSelfInvocation(),
+        clientTerminals: {},
+        continuationRequests: { offer: () => Effect.void },
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          followAgentWorkState: true,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath: yield* path.fromFileUrl(
+              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+            ),
+            protocolEvents,
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleCreateTerminal: (handler) =>
+                Effect.sync(() => {
+                  handlers.push(handler);
+                }).pipe(Effect.andThen(runtime.handleCreateTerminal(handler))),
+            }),
+          }),
+        },
+      });
+      const threadId = ThreadId.make("thread-native-terminal-stop");
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+        providerSessionId: ProviderSessionId.make("session-native-terminal-stop"),
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      assert.lengthOf(handlers, 1);
+      const old = handlers[0]!;
+      const request = {
+        sessionId: "mock-session-1",
+        command: process.execPath,
+        args: ["-e", "process.exit(0)"],
+      };
+      const context = { requestId: "terminal-fence", method: "terminal/create" };
+      yield* old(request, context);
+      yield* runtime.interruptTurn({
+        providerThread,
+        providerTurnId: idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: "terminal-fence",
+        }),
+        requestRuntimeRestart: true,
+      });
+      yield* Stream.fromQueue(protocolEvents).pipe(
+        Stream.filter(
+          (event) => event.direction === "outgoing" && rawProtocolMethod(event) === "session/close",
+        ),
+        Stream.runHead,
+      );
+      assert.isTrue(Exit.isFailure(yield* old(request, context).pipe(Effect.exit)));
+      yield* runtime.resumeThread({ providerThread, modelSelection, runtimePolicy });
+      assert.lengthOf(handlers, 2);
+      yield* handlers[1]!(request, context);
+      assert.isTrue(Exit.isFailure(yield* old(request, context).pipe(Effect.exit)));
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("negotiates and executes optional native session forks through the ACP runtime", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -6579,12 +6662,19 @@ describe("AcpAdapterV2", () => {
           restartRuntimeOnEveryInterrupt: true,
           terminateRuntimeProcessGroupOnInterrupt: true,
           preserveRuntimeOnSettledInterrupt: true,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
-            protocolEvents,
-          }),
+          makeRuntime: (input) =>
+            makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
+              protocolEvents,
+            })(input).pipe(
+              Effect.map((runtime) => {
+                const { terminateProcessGroup: _terminateProcessGroup, ...withoutTeardown } =
+                  runtime;
+                return withoutTeardown;
+              }),
+            ),
         },
         selfInvocation,
       });
@@ -8058,12 +8148,19 @@ describe("AcpAdapterV2", () => {
           capabilities: AcpProviderCapabilitiesV2,
           restartRuntimeAfterInterrupt: true,
           terminateRuntimeProcessGroupOnInterrupt: true,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
-            protocolEvents,
-          }),
+          makeRuntime: (input) =>
+            makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
+              protocolEvents,
+            })(input).pipe(
+              Effect.map((runtime) => {
+                const { terminateProcessGroup: _terminateProcessGroup, ...withoutTeardown } =
+                  runtime;
+                return withoutTeardown;
+              }),
+            ),
         },
         selfInvocation,
       });
@@ -8149,6 +8246,7 @@ describe("AcpAdapterV2", () => {
             childProcessSpawner,
             mockAgentPath,
             ownDetachedProcessGroup: true,
+            ownDescendantProcessGroups: false,
             processGroupPlatform: "win32",
             windowsProcessTreeTerminator: () =>
               Deferred.succeed(teardownStarted, undefined).pipe(

@@ -1,3 +1,4 @@
+import { makeTurnInput } from "./AcpAdapterV2.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -653,6 +654,112 @@ describe("AntigravityAdapterV2 html_render pages", () => {
       assert.strictEqual(yield* mcpSessions.takeHtmlRender(threadId, report), undefined);
       assert.strictEqual(yield* mcpSessions.takeHtmlRender(threadId, failed), undefined);
       assert.strictEqual(yield* mcpSessions.takeHtmlRender(threadId, errored), undefined);
+    }).pipe(Effect.provide(layerSession), Effect.scoped),
+  );
+});
+
+describe("Antigravity failed-RPC Stop", () => {
+  it.live("confirms real runtime termination before reporting Stop complete", () =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const children: Array<ReturnType<typeof ChildProcessSpawner.makeHandle>> = [];
+      const childProcessSpawner = ChildProcessSpawner.make((command) =>
+        spawner.spawn(command).pipe(
+          Effect.tap((handle) =>
+            Effect.sync(() => {
+              children.push(handle);
+            }),
+          ),
+        ),
+      );
+      const path = yield* Path.Path;
+      const crypto = yield* Crypto.Crypto;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const instanceId = ProviderInstanceId.make("antigravity-failed-stop");
+      const threadId = ThreadId.make("thread-antigravity-failed-stop");
+      const adapter = yield* makeAntigravityAdapterV2({
+        instanceId,
+        selfInvocation: yield* resolveSelfInvocation(),
+        makeRuntime: (input) =>
+          makeAntigravityAcpRuntime({
+            ...input,
+            childProcessSpawner,
+            spawn: {
+              command: process.execPath,
+              args: [mockAgentPath],
+              cwd: input.cwd,
+              env: { T3_ACP_ANTIGRAVITY: "1", T3_ACP_ACTIVE_TOOL_OUTCOME: "failed" },
+            },
+          }).pipe(Effect.provideService(Crypto.Crypto, crypto)),
+        withProcess: (_stop, task) => task,
+        // @effect-diagnostics-next-line effectSucceedWithVoid:off - The optional model requires undefined, not void.
+        defaultModel: Effect.succeed(undefined),
+      });
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "gemini-test-low" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("session-antigravity-failed-stop"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+          modelSelection,
+        }),
+      );
+      const events = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      );
+      const terminal = events.find((event) => event.type === "turn.terminal");
+      assert.equal(terminal?.status, "failed");
+      if (terminal === undefined) return assert.fail("expected a failed root");
+      assert.lengthOf(children, 1);
+      assert.isTrue(yield* children[0]!.isRunning);
+      yield* runtime.interruptTurn({
+        providerThread,
+        providerTurnId: terminal.providerTurnId,
+        requestRuntimeRestart: true,
+      });
+      yield* Effect.ignore(children[0]!.exitCode);
+      assert.isFalse(yield* children[0]!.isRunning);
+      const stopped = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "tool-call-long-running-1" &&
+              event.turnItem.status === "interrupted",
+          ),
+          Stream.runCollect,
+        ),
+      );
+      const item = stopped.find(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === "tool-call-long-running-1",
+      );
+      if (item?.type === "turn_item.updated") assert.isNotNull(item.turnItem.completedAt);
+      assert.isFalse(stopped.some((event) => event.type === "turn.terminal"));
     }).pipe(Effect.provide(layerSession), Effect.scoped),
   );
 });

@@ -92,6 +92,10 @@ const fixes: ReadonlyArray<{
   },
   // Command-label normalization must not hide the Grok regression test checkpoint.
   { commit: "6e276dd3c685a41d096b52da13902dbefbe6dfbb" },
+  {
+    commit: "c9c31f938d9787c67d726a523fb32b28b3464e2c",
+    label: "Confirm Stop for every owned ACP runtime and client terminal",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {

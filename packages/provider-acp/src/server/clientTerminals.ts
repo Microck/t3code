@@ -99,6 +99,7 @@ interface ManagedAcpTerminal {
 export interface AcpClientTerminals {
   readonly create: (
     request: EffectAcpSchema.CreateTerminalRequest,
+    admit?: Effect.Effect<void, EffectAcpErrors.AcpRequestError>,
   ) => Effect.Effect<EffectAcpSchema.CreateTerminalResponse, EffectAcpErrors.AcpRequestError>;
   readonly output: (
     request: EffectAcpSchema.TerminalOutputRequest,
@@ -193,10 +194,11 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
     return Effect.succeed(terminal);
   };
 
-  const create: AcpClientTerminals["create"] = (request) =>
+  const create: AcpClientTerminals["create"] = (request, admit = Effect.void) =>
     creationPermit.withPermit(
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
+          yield* admit;
           const liveCount = Array.from(terminals.values()).filter(
             (terminal) => !terminal.released && terminal.exitStatus === undefined,
           ).length;
@@ -360,15 +362,20 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
     terminals.get(terminalId)?.commandLine;
 
   const disposeAll: AcpClientTerminals["disposeAll"] = Effect.uninterruptible(
-    Effect.suspend(() =>
-      Effect.forEach(
-        Array.from(terminals.values()),
-        (terminal) =>
-          Effect.sync(() => {
-            terminal.released = true;
-          }).pipe(Effect.andThen(terminal.dispose), Effect.andThen(Deferred.await(terminal.exit))),
-        { concurrency: "unbounded", discard: true },
-      ).pipe(Effect.andThen(Effect.sync(pruneReleasedSnapshots))),
+    creationPermit.withPermit(
+      Effect.suspend(() =>
+        Effect.forEach(
+          Array.from(terminals.values()),
+          (terminal) =>
+            Effect.sync(() => {
+              terminal.released = true;
+            }).pipe(
+              Effect.andThen(terminal.dispose),
+              Effect.andThen(Deferred.await(terminal.exit)),
+            ),
+          { concurrency: "unbounded", discard: true },
+        ).pipe(Effect.andThen(Effect.sync(pruneReleasedSnapshots))),
+      ),
     ),
   );
 
@@ -388,7 +395,10 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
       );
 
   return {
-    create: logged("terminal/create", create),
+    create: (request, admit) =>
+      logged("terminal/create", (value: EffectAcpSchema.CreateTerminalRequest) =>
+        create(value, admit),
+      )(request),
     output: logged("terminal/output", output),
     waitForExit: logged("terminal/wait_for_exit", waitForExit),
     kill: logged("terminal/kill", kill),

@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 // @effect-diagnostics nodeBuiltinImport:off
 
 import {
@@ -150,6 +151,9 @@ export interface AcpAdapterV2RuntimeInput {
   readonly processEnvironment?: NodeJS.ProcessEnv;
   readonly resumeSessionId?: string;
   readonly interruptPromptOnCancel?: boolean;
+  readonly ownDetachedProcessGroup?: boolean;
+  readonly ownDescendantProcessGroups?: boolean;
+  readonly processGroupPlatform?: NodeJS.Platform;
   readonly clientCapabilities: EffectAcpSchema.InitializeRequest["clientCapabilities"];
   readonly clientInfo: AcpSessionRuntime.AcpSessionRuntimeOptions["clientInfo"];
   readonly requestLogger?: NonNullable<AcpSessionRuntime.AcpSessionRuntimeOptions["requestLogger"]>;
@@ -1432,6 +1436,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   const agentScope = yield* AgentScope;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
+  const hostPlatform = yield* HostProcess.Platform;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { flavor, selfInvocation: self } = options;
   const readMcpContext = (threadId: ThreadId | null) =>
@@ -1681,6 +1686,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const runtimeRestartRequired = yield* Ref.make(false);
         const runtimeTeardownState = yield* Ref.make<AcpRuntimeTeardownState>({ _tag: "Idle" });
         const runtimeCallbackGeneration = yield* Ref.make(0);
+        const terminalCallbackGeneration = yield* Ref.make(0);
         const runtimeCallbackGenerationCounter = yield* Ref.make(0);
         const allocateRuntimeCallbackGeneration = Ref.updateAndGet(
           runtimeCallbackGenerationCounter,
@@ -2141,6 +2147,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         ): AcpAdapterV2RuntimeInput => {
           return {
             cwd: input.runtimePolicy.cwd ?? process.cwd(),
+            // Every adapter-owned ACP process must support confirmed explicit Stop.
+            ownDetachedProcessGroup: true,
+            ownDescendantProcessGroups: hostPlatform === "linux",
+            processGroupPlatform: hostPlatform,
             runtimePolicy: input.runtimePolicy,
             mcpServers: mcpContext.servers,
             acpMcpServers: mcpContext.acpServers,
@@ -6090,10 +6100,29 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 
         const wireAcpRuntimeTerminalHandlers = Effect.fnUntraced(function* (
           targetRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"],
+          handlerGeneration: number,
         ) {
           if (clientTerminals === undefined) return;
+          const terminalGeneration = yield* Ref.updateAndGet(
+            terminalCallbackGeneration,
+            (generation) => generation + 1,
+          );
           yield* targetRuntime.handleCreateTerminal((request) =>
-            guardClientTerminalCreate.pipe(Effect.andThen(clientTerminals.create(request))),
+            clientTerminals.create(
+              request,
+              Effect.gen(function* () {
+                if (
+                  (yield* Ref.get(runtimeCallbackGeneration)) !== handlerGeneration ||
+                  (yield* Ref.get(terminalCallbackGeneration)) !== terminalGeneration ||
+                  (yield* Ref.get(runtimeTeardownState))._tag !== "Idle"
+                ) {
+                  return yield* EffectAcpErrors.AcpRequestError.internalError(
+                    "ACP terminal/create belongs to a stopped runtime.",
+                  );
+                }
+                yield* guardClientTerminalCreate;
+              }),
+            ),
           );
           yield* targetRuntime.handleTerminalOutput(clientTerminals.output);
           yield* targetRuntime.handleTerminalWaitForExit(clientTerminals.waitForExit);
@@ -6175,7 +6204,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             yield* wireAcpRuntimeMcpHandlers(targetRuntime, runtimeMcpBridge);
           }
           if (handlerOptions.terminals !== false) {
-            yield* wireAcpRuntimeTerminalHandlers(targetRuntime);
+            yield* wireAcpRuntimeTerminalHandlers(targetRuntime, handlerGeneration);
           }
           if (handlerOptions.sessionUpdates !== false) {
             yield* targetRuntime.handleSessionUpdate((rawNotification) =>
@@ -6701,7 +6730,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     yield* readMcpContext(threadId),
                     replacementExit.value.started.sessionId,
                   );
-                  yield* wireAcpRuntimeTerminalHandlers(replacementExit.value.replacementRuntime);
+                  yield* wireAcpRuntimeTerminalHandlers(
+                    replacementExit.value.replacementRuntime,
+                    replacementGeneration,
+                  );
                   yield* commitSessionState(replacementExit.value.started);
                   while (true) {
                     const buffered = stagedSessionUpdates.splice(0, stagedSessionUpdates.length);
@@ -8258,7 +8290,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         }
                         yield* runtimeCallbackPermit.withPermit(
                           Effect.gen(function* () {
-                            // Callbacks can settle the turn while close is awaiting confirmation.
+                            // Close fences terminal admission without dropping final protocol notifications.
+                            yield* Ref.update(
+                              terminalCallbackGeneration,
+                              (generation) => generation + 1,
+                            );
                             const context = yield* Ref.get(activeTurn);
                             const carryover = yield* Ref.get(carryoverSubagents);
                             yield* Ref.set(stoppedRunQuarantine, true);
@@ -8275,6 +8311,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                             }
                           }),
                         );
+                        yield* clientTerminals?.disposeAll ?? Effect.void;
                         return undefined;
                       }
                       const softSteerCandidate =
@@ -8307,7 +8344,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         (turnInput.requestRuntimeRestart === true ||
                           flavor.restartRuntimeOnEveryInterrupt === true);
                       const hardRestart =
-                        restartRuntime && flavor.terminateRuntimeProcessGroupOnInterrupt === true;
+                        restartRuntime &&
+                        (turnInput.requestRuntimeRestart === true ||
+                          flavor.terminateRuntimeProcessGroupOnInterrupt === true);
                       if (hardRestart) {
                         const teardownState = yield* Ref.get(runtimeTeardownState);
                         if (teardownState._tag === "Failed") {
@@ -8370,6 +8409,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                           yield* quarantineStoppedRun();
                           yield* cancelPendingRuntimeRequests();
                           yield* terminalizeCarryoverSubagents(orphanCarryover);
+                          yield* clientTerminals?.disposeAll ?? Effect.void;
                           if (runtime.terminateProcessGroup === undefined) {
                             const error = new ProviderAdapter.ProviderAdapterProtocolError({
                               driver,
@@ -8462,6 +8502,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         yield* quarantineStoppedRun();
                       }
                       yield* cancelPendingRuntimeRequests();
+                      if (hardRestart || turnInput.requestRuntimeRestart === true)
+                        yield* clientTerminals?.disposeAll ?? Effect.void;
                       // Finalize before process-group kill so projection/UI cannot
                       // lag a dead transport, and concurrent interrupt effects see
                       // activeTurn cleared (idempotent success) rather than racing.
