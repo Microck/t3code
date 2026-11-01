@@ -164,6 +164,23 @@ describe("GrokAdapterV2 capabilities", () => {
     assert.isTrue(acpCompletedTurnShouldTerminalizeTool(foreground, flavor));
     assert.isFalse(acpCompletedTurnShouldTerminalizeTool(monitor, flavor));
     assert.isFalse(acpCompletedTurnShouldTerminalizeTool(subagent, flavor));
+    const waiting = { ...foreground, status: "requiresAction" as const };
+    assert.isFalse(acpCompletedTurnShouldTerminalizeTool(waiting, flavor));
+    assert.isTrue(acpCompletedTurnShouldTerminalizeTool(waiting, flavor, "failed"));
+    assert.isFalse(
+      acpCompletedTurnShouldTerminalizeTool(
+        { ...monitor, status: "requiresAction" },
+        flavor,
+        "failed",
+      ),
+    );
+    assert.isFalse(
+      acpCompletedTurnShouldTerminalizeTool(
+        { ...subagent, status: "requiresAction" },
+        flavor,
+        "failed",
+      ),
+    );
   });
 });
 
