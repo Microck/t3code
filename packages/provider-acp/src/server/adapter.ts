@@ -1568,9 +1568,15 @@ function acpPostSettleMonitorPromptShouldSuppress(
 export function acpCompletedTurnShouldTerminalizeTool(
   tool: AcpToolCallState,
   flavor: Pick<AcpAdapterV2Flavor, "extractBackgroundTaskId" | "extractSubagentUpdate">,
+  terminalStatus: "completed" | "failed" = "completed",
 ): boolean {
   const status = toolStatus(tool.status);
-  if (status !== "pending" && status !== "running") return false;
+  if (
+    status !== "pending" &&
+    status !== "running" &&
+    !(terminalStatus === "failed" && status === "waiting")
+  )
+    return false;
   if (flavor.extractBackgroundTaskId?.(tool) !== undefined) return false;
   return flavor.extractSubagentUpdate?.(tool) === undefined;
 }
@@ -7851,7 +7857,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           status: "completed" | "failed" = "completed",
         ) {
           for (const tool of context.tools.values()) {
-            if (!acpCompletedTurnShouldTerminalizeTool(tool, { ...flavor, extractSubagentUpdate }))
+            if (
+              !acpCompletedTurnShouldTerminalizeTool(
+                tool,
+                { ...flavor, extractSubagentUpdate },
+                status,
+              )
+            )
               continue;
             yield* emitTool(context, tool, status);
           }
