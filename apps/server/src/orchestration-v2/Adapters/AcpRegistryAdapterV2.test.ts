@@ -1541,7 +1541,7 @@ describe("AcpRegistryAdapterV2", () => {
         const waiting = failed.filter(
           (event) =>
             event.type === "turn_item.updated" &&
-            event.turnItem.nativeItemRef?.nativeId.endsWith(":requires-action"),
+            event.turnItem.nativeItemRef?.nativeId?.endsWith(":requires-action"),
         );
         assert.isAtLeast(waiting.length, 2);
         const last = waiting.at(-1)!;
