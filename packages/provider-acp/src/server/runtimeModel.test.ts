@@ -13,9 +13,7 @@ import {
   parseSessionModeState,
   parseSessionUpdateEvent,
   sessionModelStateFromInitialize,
-  sessionUpdateCountsAsLoadReplayActivity,
   sessionUpdateIsReplay,
-  syntheticLoadSessionResponseFromInitialize,
   toolCallProgressLength,
   withTrackedPermissionToolCall,
   type AcpToolCallState,
@@ -64,97 +62,6 @@ describe("AcpRuntimeModel", () => {
         },
       } satisfies EffectAcpSchema.SessionNotification),
     ).toBe(false);
-  });
-
-  it("ignores Grok keepalive chunks when tracking session/load replay activity", () => {
-    expect(
-      sessionUpdateCountsAsLoadReplayActivity({
-        sessionId: "session-1",
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "" },
-        },
-      } satisfies EffectAcpSchema.SessionNotification),
-    ).toBe(false);
-    expect(
-      sessionUpdateCountsAsLoadReplayActivity({
-        _meta: { isReplay: true },
-        sessionId: "session-1",
-        update: {
-          sessionUpdate: "tool_call",
-          toolCallId: "replay-tool",
-          title: "Replay",
-          kind: "search",
-          status: "completed",
-        },
-      } satisfies EffectAcpSchema.SessionNotification),
-    ).toBe(true);
-  });
-
-  it("ignores load-replay activity from other sessions while a load gate is active", () => {
-    expect(
-      sessionUpdateCountsAsLoadReplayActivity(
-        {
-          sessionId: "session-other",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "unrelated" },
-          },
-        } satisfies EffectAcpSchema.SessionNotification,
-        "session-loading",
-      ),
-    ).toBe(false);
-    expect(
-      sessionUpdateCountsAsLoadReplayActivity(
-        {
-          sessionId: "session-loading",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "replay" },
-          },
-        } satisfies EffectAcpSchema.SessionNotification,
-        "session-loading",
-      ),
-    ).toBe(true);
-  });
-
-  it("ignores malformed initialize mode state in synthetic load responses", () => {
-    const response = syntheticLoadSessionResponseFromInitialize({
-      protocolVersion: 1,
-      _meta: {
-        modeState: {
-          currentModeId: "code",
-          availableModes: [{ id: "code", name: 12 }],
-        },
-      },
-    } as EffectAcpSchema.InitializeResponse);
-
-    expect(response.modes).toBeUndefined();
-    expect(response._meta).toMatchObject({ t3SessionLoadReady: "replay_idle" });
-  });
-
-  it("keeps initialize mode state whose modes have null descriptions", () => {
-    const response = syntheticLoadSessionResponseFromInitialize({
-      protocolVersion: 1,
-      _meta: {
-        modeState: {
-          currentModeId: "code",
-          availableModes: [
-            { id: "ask", name: "Ask", description: null },
-            { id: "code", name: "Code", description: "Edit files", _meta: null },
-          ],
-          _meta: null,
-        },
-      },
-    } satisfies EffectAcpSchema.InitializeResponse);
-
-    expect(parseSessionModeState(response)).toEqual({
-      currentModeId: "code",
-      availableModes: [
-        { id: "ask", name: "Ask" },
-        { id: "code", name: "Code", description: "Edit files" },
-      ],
-    });
   });
 
   it("reads initialize model state and ignores malformed model state", () => {

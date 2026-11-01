@@ -1,11 +1,5 @@
-import * as Clock from "effect/Clock";
-import * as Duration from "effect/Duration";
-import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as EffectAcpSchema from "effect-acp/compat";
-import * as EffectAcpSchemaV1 from "effect-acp/schema-v1";
 import {
   deriveToolActivityPresentation,
   mergeToolActivityData,
@@ -21,9 +15,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Modes were removed from ACP v2, so the v1 wire schema is the source of truth.
 const isSessionModelState = Schema.is(EffectAcpSchema.SessionModelState);
-const isSessionModeState = Schema.is(EffectAcpSchemaV1.SessionModeState);
 
 export interface AcpSessionMode {
   readonly id: string;
@@ -1265,92 +1257,12 @@ export function sessionUpdateIsReplay(params: EffectAcpSchema.SessionNotificatio
   return isRecord(meta) && meta.isReplay === true;
 }
 
-export function sessionUpdateCountsAsLoadReplayActivity(
-  params: EffectAcpSchema.SessionNotification,
-  gatedSessionId?: string,
-): boolean {
-  if (gatedSessionId !== undefined && params.sessionId !== gatedSessionId) {
-    return false;
-  }
-  if (sessionUpdateIsReplay(params)) return true;
-  const update = params.update;
-  switch (update.sessionUpdate) {
-    case "agent_message_chunk":
-    case "agent_thought_chunk":
-      return (acpContentBlockDisplayText(update.content)?.length ?? 0) > 0;
-    case "agent_message":
-    case "agent_thought":
-      return (update.content ?? []).some(
-        (content) => (acpContentBlockDisplayText(content)?.length ?? 0) > 0,
-      );
-    case "tool_call":
-    case "tool_call_update":
-    case "plan":
-    case "plan_update":
-    case "plan_removed":
-    case "available_commands_update":
-    case "current_mode_update":
-    case "config_option_update":
-    case "session_info_update":
-    case "usage_update":
-    case "compaction_update":
-    case "compaction_summary_chunk":
-      return true;
-    default:
-      return false;
-  }
-}
-
-export interface SessionLoadGate {
-  readonly active: boolean;
-  readonly sessionId: string;
-  readonly lastActivityAtMillis: number | undefined;
-  readonly idleGap: Duration.Duration;
-  readonly initializeResult: EffectAcpSchema.InitializeResponse;
-  readonly candidateConfigOptions?: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
-}
-
-export const waitForSessionLoadReplayIdle = Effect.fn(
-  "AcpRuntimeModel.waitForSessionLoadReplayIdle",
-)(function* (input: {
-  readonly gateRef: Ref.Ref<Option.Option<SessionLoadGate>>;
-}): Effect.fn.Return<EffectAcpSchema.LoadSessionResponse, never> {
-  const pollInterval = Duration.millis(25);
-  while (true) {
-    const gate = yield* Ref.get(input.gateRef);
-    if (Option.isSome(gate) && gate.value.active && gate.value.lastActivityAtMillis !== undefined) {
-      const idleGapMillis = Duration.toMillis(gate.value.idleGap);
-      const nowMillis = yield* Clock.currentTimeMillis;
-      if (nowMillis - gate.value.lastActivityAtMillis >= idleGapMillis) {
-        return syntheticLoadSessionResponseFromInitialize(gate.value.initializeResult);
-      }
-    }
-    yield* Effect.sleep(pollInterval);
-  }
-});
-
 export function sessionModelStateFromInitialize(
   initializeResult: EffectAcpSchema.InitializeResponse,
 ): EffectAcpSchema.SessionModelState | undefined {
   const meta = initializeResult._meta;
   const modelState = isRecord(meta) ? meta.modelState : undefined;
   return isSessionModelState(modelState) ? modelState : undefined;
-}
-
-export function syntheticLoadSessionResponseFromInitialize(
-  initializeResult: EffectAcpSchema.InitializeResponse,
-): EffectAcpSchema.LoadSessionResponse {
-  const meta = initializeResult._meta;
-  const modeState = isRecord(meta) ? meta.modeState : undefined;
-
-  const modes = isSessionModeState(modeState) ? modeState : undefined;
-
-  return {
-    ...(modes ? { modes } : {}),
-    _meta: {
-      t3SessionLoadReady: "replay_idle",
-    },
-  };
 }
 
 // Persisted rawPayload must not bypass cumulative output limits.
