@@ -2741,6 +2741,377 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.live("creates a fresh ACP identity when recovering an exhausted target", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-exhausted-target");
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            protocolEvents,
+            wrapRuntime: (runtime, ordinal) => ({
+              ...runtime,
+              start: () =>
+                runtime.start().pipe(
+                  Effect.map((started) => ({
+                    ...started,
+                    sessionId: `mock-recovery-session-${ordinal}`,
+                  })),
+                ),
+            }),
+          }),
+        },
+        selfInvocation,
+      });
+      const threadId = ThreadId.make("thread-acp-exhausted-target");
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-exhausted-target"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const original = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread: original,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+          ordinal: 1,
+        }),
+      );
+      yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runDrain,
+      );
+      const replacement = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+        existingProviderThread: { ...original, nativeThreadRef: null },
+        forceNewNativeThread: true,
+      });
+      assert.notEqual(replacement.nativeThreadRef?.nativeId, original.nativeThreadRef?.nativeId);
+      assert.equal(replacement.id, original.id);
+      assert.equal(replacement.nativeMetadata?.itemIdentityVersion, 2);
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread: replacement,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+          ordinal: 2,
+        }),
+      );
+      const events = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+      );
+      assert.isTrue(
+        events.some((event) => event.type === "turn.terminal" && event.status === "completed"),
+      );
+      const methods = yield* pollProtocolMethods(protocolEvents);
+      assert.equal(methods.filter((method) => method === "session/new").length, 2);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.live("fences old client terminal handlers across native close and runtime replacement", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const path = yield* Path.Path;
+      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      const handlers: Array<Parameters<RuntimeService["handleCreateTerminal"]>[0]> = [];
+      const instanceId = ProviderInstanceId.make("acp-native-terminal-stop");
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        selfInvocation: yield* resolveSelfInvocation(),
+        clientTerminals: {},
+        continuationRequests: { offer: () => Effect.void },
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          followAgentWorkState: true,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath: yield* path.fromFileUrl(
+              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+            ),
+            protocolEvents,
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleCreateTerminal: (handler) =>
+                Effect.sync(() => {
+                  handlers.push(handler);
+                }).pipe(Effect.andThen(runtime.handleCreateTerminal(handler))),
+            }),
+          }),
+        },
+      });
+      const threadId = ThreadId.make("thread-native-terminal-stop");
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+        providerSessionId: ProviderSessionId.make("session-native-terminal-stop"),
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      assert.lengthOf(handlers, 1);
+      const old = handlers[0]!;
+      const request = {
+        sessionId: "mock-session-1",
+        command: process.execPath,
+        args: ["-e", "process.exit(0)"],
+      };
+      const context = { requestId: "terminal-fence", method: "terminal/create" };
+      yield* old(request, context);
+      yield* runtime.interruptTurn({
+        providerThread,
+        providerTurnId: idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: "terminal-fence",
+        }),
+        requestRuntimeRestart: true,
+      });
+      yield* Stream.fromQueue(protocolEvents).pipe(
+        Stream.filter(
+          (event) => event.direction === "outgoing" && rawProtocolMethod(event) === "session/close",
+        ),
+        Stream.runHead,
+      );
+      assert.isTrue(Exit.isFailure(yield* old(request, context).pipe(Effect.exit)));
+      yield* runtime.resumeThread({ providerThread, modelSelection, runtimePolicy });
+      assert.lengthOf(handlers, 2);
+      yield* handlers[1]!(request, context);
+      assert.isTrue(Exit.isFailure(yield* old(request, context).pipe(Effect.exit)));
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect.each([
+    { kind: "command", cancellation: "failed" },
+    { kind: "subagent", cancellation: "failed" },
+    { kind: "command", cancellation: "unacknowledged" },
+    { kind: "subagent", cancellation: "unacknowledged" },
+  ] as const)(
+    "keeps retained $kind work stoppable after $cancellation soft cancellation",
+    ({ kind, cancellation }) =>
+      Effect.gen(function* () {
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const children: Array<ReturnType<typeof ChildProcessSpawner.makeHandle>> = [];
+        const observed = ChildProcessSpawner.make((command) =>
+          spawner.spawn(command).pipe(
+            Effect.tap((child) =>
+              Effect.sync(() => {
+                children.push(child);
+              }),
+            ),
+          ),
+        );
+        const path = yield* Path.Path;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const secondStarted = yield* Deferred.make<void>();
+        const cancelAttempted = yield* Deferred.make<void>();
+        type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+        let update: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+        let prompts = 0;
+        let runtimeCount = 0;
+        const instanceId = ProviderInstanceId.make("retained-soft-recovery");
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          selfInvocation: yield* resolveSelfInvocation(),
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            extractSubagentUpdate: (tool) =>
+              kind === "subagent" && tool.toolCallId === "retained-child"
+                ? {
+                    nativeTaskId: "retained-child",
+                    prompt: "child work",
+                    title: "child work",
+                    model: null,
+                    status: "running",
+                    childSessionId: null,
+                    result: null,
+                    suppressNormalTool: true,
+                  }
+                : undefined,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner: observed,
+              mockAgentPath: yield* path.fromFileUrl(
+                new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+              ),
+              wrapRuntime: (runtime, ordinal) => {
+                runtimeCount = ordinal;
+                if (ordinal !== 1) return runtime;
+                return {
+                  ...runtime,
+                  handleSessionUpdate: (handler) =>
+                    Effect.sync(() => {
+                      update = handler;
+                    }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+                  prompt: () =>
+                    Effect.gen(function* () {
+                      if (++prompts === 1) {
+                        if (update === undefined)
+                          return yield* Effect.die("missing session update handler");
+                        yield* update({
+                          sessionId: "mock-session-1",
+                          update: {
+                            sessionUpdate: "tool_call",
+                            toolCallId: kind === "command" ? "retained-command" : "retained-child",
+                            kind: kind === "command" ? "execute" : "other",
+                            title: "Retained work",
+                            status: "in_progress",
+                            ...(kind === "command"
+                              ? { rawInput: { command: "retained-work" } }
+                              : {}),
+                          },
+                        });
+                        return yield* EffectAcpErrors.AcpRequestError.internalError(
+                          "first prompt failed",
+                        );
+                      }
+                      yield* Deferred.succeed(secondStarted, undefined);
+                      return yield* Effect.never;
+                    }),
+                  cancel: Deferred.succeed(cancelAttempted, undefined).pipe(
+                    Effect.andThen(
+                      cancellation === "failed"
+                        ? EffectAcpErrors.AcpRequestError.internalError("soft cancel failed")
+                        : Effect.void,
+                    ),
+                  ),
+                };
+              },
+            }),
+          },
+        });
+        const threadId = ThreadId.make("thread-retained-soft-recovery");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+          providerSessionId: ProviderSessionId.make("session-retained-soft-recovery"),
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        const turn = (ordinal: number) =>
+          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal });
+        yield* runtime.startTurn(turn(1));
+        const firstEvents = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runCollect,
+          ),
+        );
+        const first = firstEvents.find((event) => event.type === "turn.terminal");
+        assert.equal(first?.status, "failed");
+        if (first === undefined) return assert.fail("missing first terminal");
+        assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+        yield* runtime.startTurn(turn(2));
+        yield* Deferred.await(secondStarted);
+        const secondId = idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
+        });
+        const stopping = yield* runtime
+          .interruptTurn({ providerThread, providerTurnId: secondId })
+          .pipe(Effect.exit, Effect.forkScoped);
+        yield* Deferred.await(cancelAttempted);
+        yield* TestClock.adjust(cancellation === "failed" ? "2 seconds" : "10 seconds");
+        const activeAfterTimeout = false;
+        assert.isTrue(Exit.isFailure(yield* Fiber.join(stopping)));
+        if (!activeAfterTimeout)
+          yield* runtime.events.pipe(
+            Stream.takeUntil(
+              (event) => event.type === "turn.terminal" && event.providerTurnId === secondId,
+            ),
+            Stream.runCollect,
+          );
+        const rejected = yield* runtime.startTurn(turn(3)).pipe(Effect.exit);
+        if (Exit.isSuccess(rejected))
+          return assert.fail("recovery must preserve retained work until explicit Stop");
+        assert.include(
+          Cause.pretty(rejected.cause),
+          activeAfterTimeout ? "still active" : "Stop retained background work",
+        );
+        assert.equal(runtimeCount, 1);
+        assert.lengthOf(children, 1);
+        assert.isTrue(yield* children[0]!.isRunning);
+        assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+        yield* runtime.interruptTurn({
+          providerThread,
+          providerTurnId: secondId,
+          requestRuntimeRestart: true,
+        });
+        yield* Effect.ignore(children[0]!.exitCode);
+        assert.isFalse(yield* children[0]!.isRunning);
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        yield* runtime.startTurn(turn(3));
+        assert.equal(runtimeCount, 2);
+        const recovered = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil(
+              (event) => event.type === "turn.terminal" && event.providerTurnId !== secondId,
+            ),
+            Stream.runCollect,
+          ),
+        );
+        const originalTerminals = recovered.filter(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.providerTurnId === first.providerTurnId &&
+            event.turnItem.status === "interrupted",
+        );
+        assert.lengthOf(originalTerminals, 1);
+        const final = recovered.find(
+          (event) => event.type === "turn.terminal" && event.providerTurnId !== secondId,
+        );
+        if (final?.type !== "turn.terminal") return assert.fail("missing recovered terminal");
+        assert.equal(final.status, "completed");
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("negotiates and executes optional native session forks through the ACP runtime", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -3755,19 +4126,996 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.live.each([
+    "tool",
+    "chunk",
+    "terminal",
+    "synthetic",
+    "termination",
+    "termination-before",
+    "subagent-termination",
+    "subagent-termination-before",
+    "subagent-generic-termination",
+    "subagent-generic-termination-before",
+    "subagent-generic-completion",
+    "subagent-generic-next-turn-completion",
+    "subagent-generic-success",
+  ] as const)(
+    "routes retained RPC commands through %s events to their original turn without duplicate terminals",
+    (transport) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const subagentOnly = transport.startsWith("subagent-");
+        const toolTransport = transport === "tool" || transport === "chunk";
+        const fullContinuation = subagentOnly && !transport.includes("generic");
+        const terminatesFirst = transport.endsWith("-before");
+        type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+        let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+        const firstStarted = yield* Deferred.make<void>();
+        const failFirst = yield* Deferred.make<void>();
+        const secondStarted = yield* Deferred.make<void>();
+        const finishSecond = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
+        let prompts = 0;
+        const runtimeInputs: AcpAdapterV2RuntimeInput[] = [];
+        const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const instanceId = ProviderInstanceId.make("rpc-late-tools");
+        const threadId = ThreadId.make("thread-rpc-late-tools");
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          ...(fullContinuation ? { continuationRequests: { offer: () => Effect.void } } : {}),
+          selfInvocation: yield* resolveSelfInvocation(),
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            enablePostSettleContinuation: fullContinuation,
+            extractSubagentUpdate: (tool) =>
+              tool.toolCallId === "rpc-subagent"
+                ? {
+                    nativeTaskId: "rpc-child",
+                    prompt: "child work",
+                    title: "child work",
+                    model: null,
+                    status: tool.status === "completed" ? "completed" : "running",
+                    childSessionId: null,
+                    result: null,
+                    suppressNormalTool: true,
+                  }
+                : undefined,
+            makeRuntime: (runtimeInput) => {
+              runtimeInputs.push(runtimeInput);
+              return makeMockRuntime({
+                childProcessSpawner,
+                mockAgentPath,
+                protocolEvents,
+                wrapRuntime: (runtime) => ({
+                  ...runtime,
+                  handleSessionUpdate: (handler) =>
+                    Effect.sync(() => {
+                      sessionUpdateHandler = handler;
+                    }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+                  prompt: () =>
+                    Effect.gen(function* () {
+                      if (++prompts === 1) {
+                        yield* Deferred.succeed(firstStarted, undefined);
+                        yield* Deferred.await(failFirst);
+                        if (transport === "subagent-generic-success")
+                          return { stopReason: "end_turn" };
+                        return yield* EffectAcpErrors.AcpRequestError.internalError(
+                          "RPC ended before its commands",
+                        );
+                      }
+                      yield* Deferred.succeed(secondStarted, undefined);
+                      return yield* Deferred.await(finishSecond);
+                    }),
+                }),
+              })(runtimeInput);
+            },
+          },
+        });
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("session-rpc-late-tools"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime
+          .startTurn(
+            makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(firstStarted);
+        const checkSwitches = transport === "tool" || transport === "subagent-generic-completion";
+        if (checkSwitches) {
+          const activeFork = yield* runtime
+            .forkThread({
+              sourceProviderThread: providerThread,
+              targetThreadId: ThreadId.make("blocked-active-fork"),
+            })
+            .pipe(Effect.exit);
+          assert.isTrue(Exit.isFailure(activeFork));
+        }
+        assert.isDefined(sessionUpdateHandler);
+        const update = (update: EffectAcpSchema.SessionUpdate, sessionId = "mock-session-1") =>
+          sessionUpdateHandler!({ sessionId, update });
+        const nativeCommandId = (id: string) =>
+          transport === "synthetic" ? `acp-agent-terminal:${id}-terminal` : id;
+        for (const id of subagentOnly ? [] : ["rpc-command-one", "rpc-command-two"]) {
+          if (transport === "synthetic") {
+            yield* update({
+              sessionUpdate: "terminal_update",
+              terminalId: id + "-terminal",
+              command: id,
+            });
+            continue;
+          }
+          yield* update({
+            sessionUpdate: "tool_call",
+            toolCallId: id,
+            title: id,
+            kind: "execute",
+            status: "in_progress",
+            rawInput: { command: id },
+            ...(transport === "terminal"
+              ? { content: [{ type: "terminal" as const, terminalId: id + "-terminal" }] }
+              : {}),
+          });
+        }
+        if (subagentOnly)
+          yield* update({
+            sessionUpdate: "tool_call",
+            toolCallId: "rpc-subagent",
+            kind: "other",
+            title: "Child",
+            status: "in_progress",
+          });
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "rpc-read",
+          title: "Read",
+          kind: "read",
+          status: "in_progress",
+        });
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "rpc-wait",
+          title: "Wait",
+          kind: "other",
+          status: "pending",
+        });
+        if (terminatesFirst)
+          yield* runtimeInputs[0]!.onTermination!(
+            new EffectAcpErrors.AcpTransportError({
+              detail: "Injected runtime termination after RPC failure",
+              cause: "test",
+            }),
+          );
+        yield* Deferred.succeed(failFirst, undefined);
+        const firstEvents = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runCollect,
+          ),
+        );
+        const firstTerminal = firstEvents.find((event) => event.type === "turn.terminal");
+        assert.equal(firstTerminal?.type, "turn.terminal");
+        if (firstTerminal?.type !== "turn.terminal") return;
+        if (transport === "subagent-generic-success") {
+          assert.equal(firstTerminal.status, "completed");
+          assert.isDefined(runtime.hasPendingBackgroundWork);
+          assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+          return;
+        }
+        assert.equal(firstTerminal.status, "failed");
+        if (firstTerminal.status === "failed")
+          assert.equal(firstTerminal.childTurnsContinue, terminatesFirst ? undefined : true);
+        for (const id of ["rpc-read", "rpc-wait"]) {
+          const last = firstEvents.findLast(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.nativeItemRef?.nativeId === id,
+          );
+          assert.equal(last?.type, "turn_item.updated");
+          if (last?.type === "turn_item.updated") assert.equal(last.turnItem.status, "failed");
+        }
+        assert.isDefined(runtime.hasPendingBackgroundWork);
+        assert.equal(yield* runtime.hasPendingBackgroundWork!, !terminatesFirst);
+        if (checkSwitches) {
+          yield* Queue.takeBetween(protocolEvents, 0, 256);
+          const otherThread = {
+            ...providerThread,
+            nativeThreadRef: {
+              driver: ACP_TEST_DRIVER,
+              nativeId: "different-session",
+              strength: "strong" as const,
+            },
+          };
+          const rejected = [
+            yield* runtime
+              .forkThread({
+                sourceProviderThread: providerThread,
+                targetThreadId: ThreadId.make("blocked-retained-fork"),
+              })
+              .pipe(Effect.exit),
+            yield* runtime
+              .resumeThread({ providerThread: otherThread, modelSelection, runtimePolicy })
+              .pipe(Effect.exit),
+            yield* runtime.readThreadSnapshot({ providerThread: otherThread }).pipe(Effect.exit),
+            yield* runtime
+              .ensureThread({
+                threadId,
+                modelSelection,
+                runtimePolicy,
+                existingProviderThread: providerThread,
+                forceNewNativeThread: true,
+              })
+              .pipe(Effect.exit),
+            yield* runtime
+              .rollbackThread({
+                providerThread,
+                providerThreadTurns: [],
+                target: {
+                  type: "thread_start",
+                  checkpointId: CheckpointId.make("retained-rollback"),
+                  appRunOrdinal: 0,
+                },
+              })
+              .pipe(Effect.exit),
+          ];
+          assert.isTrue(rejected.every((result) => result._tag === "Failure"));
+          assert.lengthOf(runtimeInputs, 1);
+          const requests = Array.from(yield* Queue.takeBetween(protocolEvents, 0, 256)).filter(
+            (event) =>
+              event.direction === "outgoing" &&
+              ["session/fork", "session/load", "session/resume"].includes(
+                rawProtocolMethod(event) ?? "",
+              ),
+          );
+          assert.lengthOf(requests, 0);
+          assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+          yield* runtime.resumeThread({ providerThread, modelSelection, runtimePolicy });
+          yield* runtime.readThreadSnapshot({ providerThread });
+          assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+        }
+        if (transport === "chunk")
+          yield* update({
+            sessionUpdate: "tool_call_content_chunk",
+            toolCallId: "rpc-command-one",
+            content: { type: "content", content: { type: "text", text: "BEFORE NEXT TURN" } },
+          });
+        if (transport.includes("completion")) {
+          if (transport.includes("next-turn")) {
+            yield* runtime
+              .startTurn(
+                makeTurnInput({
+                  threadId,
+                  providerThread,
+                  instanceId,
+                  runtimePolicy,
+                  now,
+                  ordinal: 2,
+                }),
+              )
+              .pipe(Effect.forkScoped);
+            yield* Deferred.await(secondStarted);
+            assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+            yield* Deferred.succeed(finishSecond, { stopReason: "end_turn" });
+            yield* runtime.events.pipe(
+              Stream.takeUntil((event) => event.type === "turn.terminal"),
+              Stream.runCollect,
+            );
+            assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+          }
+          yield* update({
+            sessionUpdate: "tool_call_update",
+            toolCallId: "rpc-subagent",
+            status: "completed",
+          });
+          yield* runtime.events.pipe(
+            Stream.takeUntil(
+              (event) => event.type === "subagent.updated" && event.subagent.status === "completed",
+            ),
+            Stream.runCollect,
+          );
+          assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+          if (checkSwitches) {
+            const forked = yield* runtime.forkThread({
+              sourceProviderThread: providerThread,
+              targetThreadId: ThreadId.make("allowed-settled-fork"),
+            });
+            assert.equal(forked.nativeThreadRef?.nativeId, "mock-session-1-fork");
+          }
+          if (transport.includes("next-turn"))
+            yield* Deferred.succeed(finishSecond, { stopReason: "end_turn" });
+          return;
+        }
+        if (transport.includes("termination")) {
+          if (!terminatesFirst)
+            yield* runtimeInputs[0]!.onTermination!(
+              new EffectAcpErrors.AcpTransportError({
+                detail: "Injected runtime termination after RPC failure",
+                cause: "test",
+              }),
+            );
+          const ended = terminatesFirst
+            ? firstEvents
+            : Array.from(
+                yield* runtime.events.pipe(
+                  Stream.takeUntil((event) =>
+                    subagentOnly
+                      ? event.type === "subagent.updated" && event.subagent.status === "failed"
+                      : event.type === "turn_item.updated" &&
+                        event.turnItem.nativeItemRef?.nativeId === "rpc-command-two" &&
+                        event.turnItem.status === "failed",
+                  ),
+                  Stream.runCollect,
+                ),
+              );
+          if (subagentOnly) {
+            const failed = ended.filter(
+              (event) => event.type === "subagent.updated" && event.subagent.status === "failed",
+            );
+            assert.lengthOf(failed, 1);
+            const event = failed[0]!;
+            if (event.type === "subagent.updated") assert.isNotNull(event.subagent.completedAt);
+            assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+            assert.equal(
+              ended.filter((event) => event.type === "turn.terminal").length,
+              terminatesFirst ? 1 : 0,
+            );
+            return;
+          }
+          for (const id of ["rpc-command-one", "rpc-command-two"]) {
+            const terminalItems = ended.filter(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.nativeItemRef?.nativeId === id &&
+                event.turnItem.status === "failed",
+            );
+            assert.lengthOf(terminalItems, 1);
+            const event = terminalItems[0]!;
+            if (event.type === "turn_item.updated") {
+              assert.equal(event.turnItem.providerTurnId, firstTerminal.providerTurnId);
+              assert.isNotNull(event.turnItem.completedAt);
+            }
+          }
+          return;
+        }
+        if (!toolTransport) {
+          yield* update({
+            sessionUpdate: "terminal_output_chunk",
+            terminalId: "rpc-command-one-terminal",
+            data: Buffer.from("DONE").toString("base64"),
+          });
+          yield* update({
+            sessionUpdate: "terminal_update",
+            terminalId: "rpc-command-one-terminal",
+            exitStatus: { exitCode: 0 },
+          });
+        }
+
+        yield* runtime
+          .startTurn(
+            makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 2 }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(secondStarted);
+        if (transport === "chunk")
+          yield* update({
+            sessionUpdate: "tool_call_content_chunk",
+            toolCallId: "rpc-command-one",
+            content: {
+              type: "diff",
+              path: "/tmp/test.txt",
+              oldText: "",
+              newText: "AFTER NEXT TURN",
+            },
+          });
+        if (transport === "synthetic") {
+          yield* update({
+            sessionUpdate: "tool_call",
+            toolCallId: "late-embedding",
+            kind: "execute",
+            title: "Late terminal reference",
+            status: "in_progress",
+            content: [{ type: "terminal", terminalId: "rpc-command-two-terminal" }],
+          });
+        }
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "new-turn-read",
+          title: "Read new turn",
+          kind: "read",
+          status: "in_progress",
+        });
+        if (!toolTransport) {
+          yield* update({
+            sessionUpdate: "terminal_update",
+            terminalId: "rpc-command-one-terminal",
+            exitStatus: { exitCode: 0 },
+          });
+          yield* update({
+            sessionUpdate: "terminal_update",
+            terminalId: "rpc-command-one-terminal",
+            exitStatus: null,
+          });
+          yield* update({
+            sessionUpdate: "terminal_output_chunk",
+            terminalId: "rpc-command-one-terminal",
+            data: Buffer.from("DUPLICATE").toString("base64"),
+          });
+          yield* update(
+            {
+              sessionUpdate: "terminal_update",
+              terminalId: "rpc-command-two-terminal",
+              exitStatus: { exitCode: 0 },
+            },
+            "different-session",
+          );
+          yield* update({
+            sessionUpdate: "terminal_output_chunk",
+            terminalId: "rpc-command-two-terminal",
+            data: Buffer.from("SECOND DONE").toString("base64"),
+          });
+          yield* update({
+            sessionUpdate: "terminal_update",
+            terminalId: "rpc-command-two-terminal",
+            exitStatus: { exitCode: 0 },
+          });
+        } else {
+          yield* update({
+            sessionUpdate: "tool_call_update",
+            toolCallId: "rpc-command-one",
+            status: "completed",
+            rawOutput: "DONE",
+          });
+          yield* update({
+            sessionUpdate: "tool_call_update",
+            toolCallId: "rpc-command-one",
+            status: "completed",
+            rawOutput: "DUPLICATE",
+          });
+          if (transport === "chunk")
+            yield* update({
+              sessionUpdate: "tool_call_content_chunk",
+              toolCallId: "rpc-command-one",
+              content: { type: "content", content: { type: "text", text: "DUPLICATE CHUNK" } },
+            });
+          yield* update({
+            sessionUpdate: "tool_call_update",
+            toolCallId: "rpc-command-one",
+            status: "in_progress",
+          });
+          yield* update(
+            {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "rpc-command-two",
+              status: "completed",
+              rawOutput: "WRONG SESSION",
+            },
+            "different-session",
+          );
+          yield* update({
+            sessionUpdate: "tool_call_update",
+            toolCallId: "rpc-command-two",
+            status: "completed",
+            rawOutput: "SECOND DONE",
+          });
+        }
+        const lateEvents = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.nativeItemRef?.nativeId === nativeCommandId("rpc-command-two") &&
+                event.turnItem.status === "completed",
+            ),
+            Stream.runCollect,
+          ),
+        );
+        const completions = lateEvents.filter(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === nativeCommandId("rpc-command-one") &&
+            event.turnItem.status === "completed",
+        );
+        assert.lengthOf(completions, 1);
+        if (transport === "chunk") {
+          const outputs = lateEvents.flatMap((event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "command_execution"
+              ? [event.turnItem.output ?? ""]
+              : [],
+          );
+          assert.isTrue(outputs.some((output) => output.includes("BEFORE NEXT TURN")));
+          assert.isTrue(outputs.some((output) => output.includes("AFTER NEXT TURN")));
+          assert.isFalse(outputs.some((output) => output.includes("DUPLICATE CHUNK")));
+        }
+        for (const event of lateEvents) {
+          if (event.type !== "turn_item.updated") continue;
+          const id = event.turnItem.nativeItemRef?.nativeId;
+          if (
+            id === nativeCommandId("rpc-command-one") ||
+            id === nativeCommandId("rpc-command-two")
+          ) {
+            assert.equal(event.turnItem.providerTurnId, firstTerminal.providerTurnId);
+            assert.include(["running", "completed"], event.turnItem.status);
+            if (event.turnItem.status === "completed") assert.isNotNull(event.turnItem.completedAt);
+            if (event.turnItem.type === "command_execution")
+              assert.notInclude(event.turnItem.output ?? "", "WRONG SESSION");
+          }
+          if (id === "new-turn-read")
+            assert.notEqual(event.turnItem.providerTurnId, firstTerminal.providerTurnId);
+        }
+        assert.lengthOf(
+          lateEvents.filter((event) => event.type === "turn.terminal"),
+          0,
+        );
+
+        yield* Deferred.succeed(finishSecond, { stopReason: "end_turn" });
+        const secondEvents = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runCollect,
+          ),
+        );
+        const secondTerminal = secondEvents.find((event) => event.type === "turn.terminal");
+        assert.equal(secondTerminal?.type, "turn.terminal");
+        if (secondTerminal?.type === "turn.terminal") {
+          assert.equal(secondTerminal.status, "completed");
+          assert.notEqual(secondTerminal.providerTurnId, firstTerminal.providerTurnId);
+        }
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.live.each([
+    "structured",
+    "direct",
+    "termination",
+    "termination-before",
+    "monitor",
+    "task-output",
+    "kill-task",
+    "kill-failed",
+    "structured-before",
+    "monitor-before",
+    "stop",
+  ] as const)("settles failed-RPC Grok work through %s evidence", (source) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const instanceId = ProviderInstanceId.make("rpc-background-evidence");
+      const threadId = ThreadId.make("thread-rpc-background-evidence");
+      const taskId = "019f44a5-87d1-7640-8e35-6a4667ffc873";
+      const beforeFailure = source === "structured-before" || source === "monitor-before";
+      const monitor = source.startsWith("monitor");
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+      let taskCompleted:
+        | ((payload: unknown) => Effect.Effect<void, EffectAcpErrors.AcpError>)
+        | undefined;
+      const started = yield* Deferred.make<void>();
+      const fail = yield* Deferred.make<void>();
+      const nextStarted = yield* Deferred.make<void>();
+      const finishNext = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
+      let prompts = 0;
+      const runtimeInputs: AcpAdapterV2RuntimeInput[] = [];
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      let teardownCount = 0;
+      const grok = makeGrokAcpAdapterFlavor(
+        {
+          instanceId,
+          settings: DEFAULT_GROK_SETTINGS,
+          environment: {},
+          hostPlatform: yield* HostProcess.Platform,
+          selfInvocation,
+        },
+        yield* HostProcess.HomeDirectory,
+      );
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        selfInvocation,
+        continuationRequests: { offer: () => Effect.void },
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          enablePostSettleContinuation: true,
+          terminateRuntimeProcessGroupOnInterrupt: source === "stop",
+          normalizeToolCall: grok.normalizeToolCall!,
+          extractBackgroundTaskId: grok.extractBackgroundTaskId!,
+          isBackgroundCommandTool: grok.isBackgroundCommandTool!,
+          extractBackgroundToolMutation: grok.extractBackgroundToolMutation!,
+          extractBackgroundTaskCompletion: grok.extractBackgroundTaskCompletion!,
+          extractSubagentUpdate: grok.extractSubagentUpdate!,
+          registerExtensions: ({ runtime, applyBackgroundTaskMutation }) =>
+            registerXAiBackgroundTaskTracking(runtime, applyBackgroundTaskMutation),
+          makeRuntime: (runtimeInput) => {
+            runtimeInputs.push(runtimeInput);
+            return makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              wrapRuntime: (runtime) => ({
+                ...runtime,
+                ...(source === "stop"
+                  ? {
+                      terminateProcessGroup: Effect.sync(() => {
+                        teardownCount += 1;
+                      }),
+                    }
+                  : {}),
+                handleSessionUpdate: (handler) =>
+                  Effect.sync(() => {
+                    sessionUpdateHandler = handler;
+                  }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+                handleExtNotification: (method, schema, handler) =>
+                  Effect.sync(() => {
+                    if (method === "x.ai/task_completed")
+                      taskCompleted = (payload) =>
+                        handler(Schema.decodeUnknownSync(schema)(payload));
+                  }).pipe(Effect.andThen(runtime.handleExtNotification(method, schema, handler))),
+                prompt: () =>
+                  Effect.gen(function* () {
+                    if (++prompts === 1) {
+                      yield* Deferred.succeed(started, undefined);
+                      yield* Deferred.await(fail);
+                      return yield* EffectAcpErrors.AcpRequestError.internalError(
+                        "injected failed RPC",
+                      );
+                    }
+                    yield* Deferred.succeed(nextStarted, undefined);
+                    return yield* Deferred.await(finishNext);
+                  }),
+              }),
+            })(runtimeInput);
+          },
+        },
+      });
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("session-background-evidence"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime
+        .startTurn(
+          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
+        )
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(started);
+      const update = (update: EffectAcpSchema.SessionUpdate, sessionId = "mock-session-1") =>
+        sessionUpdateHandler!({ sessionId, update });
+      const complete = (sessionId = "mock-session-1") =>
+        taskCompleted!({
+          sessionId,
+          update: {
+            sessionUpdate: "task_completed",
+            task_id: taskId,
+            task_snapshot: { exit_code: 0, output: "BACKGROUND_DONE\n" },
+          },
+        });
+      const ended = (sessionId = "mock-session-1") =>
+        update(
+          {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: `Monitor "${taskId}" ended cleanly` },
+          },
+          sessionId,
+        );
+      yield* update({
+        sessionUpdate: "tool_call",
+        toolCallId: "background-command",
+        kind: "execute",
+        title: monitor ? "Monitor" : "Run command",
+        status: "completed",
+        rawInput: monitor ? { variant: "monitor", command: "sleep 1" } : { command: "sleep 1" },
+        rawOutput: monitor
+          ? { type: "Monitor", taskId, persistent: false }
+          : { type: "BackgroundTaskStarted", task_id: taskId },
+      });
+      if (!monitor)
+        yield* update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "background-command",
+          status: "in_progress",
+          rawOutput: { type: "Text", text: "progress\n" },
+        });
+      if (beforeFailure) {
+        if (monitor) yield* ended();
+        else yield* complete();
+      }
+      if (source === "termination-before")
+        yield* runtimeInputs[0]!.onTermination!(
+          new EffectAcpErrors.AcpTransportError({ detail: "Injected runtime end", cause: "test" }),
+        );
+      yield* Deferred.succeed(fail, undefined);
+      const firstEvents = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      );
+      const firstTerminal = firstEvents.find((event) => event.type === "turn.terminal");
+      assert.equal(firstTerminal?.type, "turn.terminal");
+      if (firstTerminal?.type !== "turn.terminal" || firstTerminal.status !== "failed")
+        return assert.fail("expected failed root");
+      assert.equal(
+        firstTerminal.childTurnsContinue,
+        beforeFailure || source === "termination-before" ? undefined : true,
+      );
+      assert.isDefined(runtime.hasPendingBackgroundWork);
+      if (source === "termination" || source === "termination-before") {
+        if (source === "termination")
+          yield* runtimeInputs[0]!.onTermination!(
+            new EffectAcpErrors.AcpTransportError({
+              detail: "Injected runtime end",
+              cause: "test",
+            }),
+          );
+        const endedEvents =
+          source === "termination-before"
+            ? firstEvents
+            : Array.from(
+                yield* runtime.events.pipe(
+                  Stream.takeUntil(
+                    (event) =>
+                      event.type === "turn_item.updated" &&
+                      event.turnItem.nativeItemRef?.nativeId === "background-command" &&
+                      event.turnItem.status === "failed",
+                  ),
+                  Stream.runCollect,
+                ),
+              );
+        const endings = endedEvents.filter(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === "background-command" &&
+            event.turnItem.status === "failed",
+        );
+        assert.lengthOf(endings, 1);
+        const ending = endings[0]!;
+        if (ending.type === "turn_item.updated") {
+          assert.equal(ending.turnItem.providerTurnId, firstTerminal.providerTurnId);
+          assert.isNotNull(ending.turnItem.completedAt);
+        }
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        return;
+      }
+      if (beforeFailure) {
+        const item = firstEvents.findLast(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === "background-command",
+        );
+        assert.equal(item?.type, "turn_item.updated");
+        if (item?.type === "turn_item.updated") {
+          assert.equal(item.turnItem.status, "completed");
+          assert.isNotNull(item.turnItem.completedAt);
+        }
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        yield* runtime
+          .startTurn(
+            makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 2 }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(nextStarted);
+        yield* update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "background-command",
+          status: "in_progress",
+        });
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "pre-failure-fence",
+          kind: "other",
+          title: "Fence",
+          status: "completed",
+        });
+        const replay = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.nativeItemRef?.nativeId === "pre-failure-fence",
+            ),
+            Stream.runCollect,
+          ),
+        );
+        assert.isFalse(
+          replay.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "background-command",
+          ),
+        );
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        yield* Deferred.succeed(finishNext, { stopReason: "end_turn" });
+        yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.runHead,
+        );
+        return;
+      }
+      assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+      if (source === "stop") {
+        yield* runtime.interruptTurn({
+          providerThread,
+          providerTurnId: firstTerminal.providerTurnId,
+          requestRuntimeRestart: true,
+        });
+        assert.equal(teardownCount, 1);
+        const terminal = yield* runtime.events.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "background-command" &&
+              (event.turnItem.status === "interrupted" || event.turnItem.status === "failed"),
+          ),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(terminal));
+        if (Option.isSome(terminal) && terminal.value.type === "turn_item.updated") {
+          assert.equal(terminal.value.turnItem.status, "interrupted");
+          assert.isNotNull(terminal.value.turnItem.completedAt);
+        }
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        return;
+      }
+      yield* runtime
+        .startTurn(
+          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 2 }),
+        )
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(nextStarted);
+      yield* complete("foreign-session");
+      yield* ended("foreign-session");
+      assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+      if (source === "kill-failed") {
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "failed-kill",
+          kind: "other",
+          title: "kill",
+          status: "completed",
+          rawInput: { variant: "KillTask", task_id: taskId },
+          rawOutput: { type: "KillTask", outcome: "failed" },
+        });
+        assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+      }
+      if (source === "direct")
+        yield* update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "background-command",
+          status: "completed",
+          rawOutput: { type: "Text", text: "DIRECT_DONE" },
+        });
+      else if (source === "structured") yield* complete();
+      else if (source === "monitor") yield* ended();
+      else
+        yield* update({
+          sessionUpdate: "tool_call",
+          toolCallId: "completion-poll",
+          kind: "other",
+          title: source === "kill-task" ? "kill" : "get_command_or_subagent_output",
+          status: "completed",
+          rawInput:
+            source === "kill-task"
+              ? { variant: "KillTask", task_id: taskId }
+              : { variant: "TaskOutput", task_ids: [taskId] },
+          rawOutput:
+            source === "kill-task"
+              ? { type: "KillTask", outcome: "killed" }
+              : {
+                  type: "TaskOutput",
+                  Result: {
+                    task_id: taskId,
+                    status: "completed",
+                    exit_code: 0,
+                    output: "BACKGROUND_DONE\n",
+                  },
+                },
+        });
+      assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+      // Different authoritative channels and a replayed ACK cannot reopen or duplicate the result.
+      yield* complete();
+      yield* update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "background-command",
+        status: "in_progress",
+      });
+      yield* update({
+        sessionUpdate: "tool_call",
+        toolCallId: "background-fence",
+        kind: "other",
+        title: "Fence",
+        status: "completed",
+      });
+      const lateEvents = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "background-fence",
+          ),
+          Stream.runCollect,
+        ),
+      );
+      const terminals = lateEvents.filter(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === "background-command",
+      );
+      assert.lengthOf(terminals, 1);
+      const item = terminals[0]!;
+      if (item.type === "turn_item.updated") {
+        assert.equal(item.turnItem.providerTurnId, firstTerminal.providerTurnId);
+        assert.equal(item.turnItem.status, "completed");
+        assert.isNotNull(item.turnItem.completedAt);
+      }
+      assert.isFalse(lateEvents.some((event) => event.type === "subagent.updated"));
+      assert.isFalse(lateEvents.some((event) => event.type === "turn.terminal"));
+      assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+      yield* Deferred.succeed(finishNext, { stopReason: "end_turn" });
+      yield* runtime.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+      );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.live.each(["cancelled", "failed", "end_turn"] as const)(
-    "closes unfinished ACP tools before a %s turn settles",
+    "settles unfinished ACP tools only for confirmed %s outcomes",
     (outcome) =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const instanceId = ProviderInstanceId.make("acp-unfinished-tool");
         const threadId = ThreadId.make("thread-acp-unfinished-tool");
+        const capturedMutation: {
+          current: AcpAdapterV2ExtensionContext["applyBackgroundTaskMutation"] | undefined;
+        } = { current: undefined };
         const adapter = yield* makeAcpAdapterV2({
+          continuationRequests: { offer: () => Effect.void },
           instanceId,
           selfInvocation: yield* resolveSelfInvocation(),
           flavor: {
             driver: ACP_TEST_DRIVER,
             capabilities: AcpProviderCapabilitiesV2,
+            enablePostSettleContinuation: true,
+            extractBackgroundTaskId: (tool) =>
+              outcome === "cancelled" && tool.toolCallId === "tool-call-long-running-1"
+                ? "surviving-task"
+                : undefined,
+            registerExtensions: (context) =>
+              Effect.sync(() => {
+                capturedMutation.current = context.applyBackgroundTaskMutation;
+              }),
             makeRuntime: makeMockRuntime({
               childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
               mockAgentPath: yield* path.fromFileUrl(
@@ -3819,8 +5167,16 @@ describe("AcpAdapterV2", () => {
           "running",
         );
         const lastTool = toolUpdates.at(-1);
-        assert.equal(lastTool?.status, outcome === "cancelled" ? "interrupted" : expectedStatus);
-        assert.isNotNull(lastTool?.completedAt);
+        assert.equal(
+          lastTool?.status,
+          outcome === "failed"
+            ? "running"
+            : outcome === "cancelled"
+              ? "interrupted"
+              : expectedStatus,
+        );
+        if (outcome === "failed") assert.isNull(lastTool?.completedAt);
+        else assert.isNotNull(lastTool?.completedAt);
         const lastWait = events.findLast(
           (event) =>
             event.type === "turn_item.updated" &&
@@ -3829,13 +5185,34 @@ describe("AcpAdapterV2", () => {
         assert.equal(lastWait?.type, "turn_item.updated");
         if (lastWait?.type === "turn_item.updated") {
           assert.equal(lastWait.turnItem.type, "dynamic_tool");
-          assert.equal(lastWait.turnItem.status, lastTool?.status);
+          assert.equal(
+            lastWait.turnItem.status,
+            outcome === "failed" ? "failed" : lastTool?.status,
+          );
           assert.isNotNull(lastWait.turnItem.completedAt);
         }
         assert.equal(
           events.find((event) => event.type === "turn.terminal")?.status,
           expectedStatus,
         );
+        if (outcome === "cancelled") {
+          assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+          const applyMutation = capturedMutation.current;
+          if (applyMutation === undefined)
+            return yield* Effect.die("Missing task mutation handler");
+          yield* applyMutation({
+            sessionId: "mock-session-1",
+            taskId: "surviving-task",
+            status: "running",
+          });
+          assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+          yield* applyMutation({
+            sessionId: "mock-session-1",
+            taskId: "surviving-task",
+            status: "completed",
+          });
+          assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        }
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
@@ -5766,12 +7143,19 @@ describe("AcpAdapterV2", () => {
           restartRuntimeOnEveryInterrupt: true,
           terminateRuntimeProcessGroupOnInterrupt: true,
           preserveRuntimeOnSettledInterrupt: true,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
-            protocolEvents,
-          }),
+          makeRuntime: (input) =>
+            makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
+              protocolEvents,
+            })(input).pipe(
+              Effect.map((runtime) => {
+                const { terminateProcessGroup: _terminateProcessGroup, ...withoutTeardown } =
+                  runtime;
+                return withoutTeardown;
+              }),
+            ),
         },
         selfInvocation,
       });
@@ -5822,139 +7206,164 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.live("direct Stop quarantine drops late background task mutations from the stopped run", () =>
-    Effect.gen(function* () {
-      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
-      const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
-      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
-      const instanceId = ProviderInstanceId.make("acp-test");
-      const capturedMutation: {
-        current:
-          | ((mutation: {
-              readonly sessionId: string;
-              readonly taskId: string;
-              readonly status: "running" | "completed" | "failed";
-            }) => Effect.Effect<void>)
-          | null;
-      } = { current: null };
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          enablePostSettleContinuation: true,
-          restartRuntimeAfterInterrupt: true,
-          terminateRuntimeProcessGroupOnInterrupt: true,
-          preserveRuntimeOnSettledInterrupt: true,
-          registerExtensions: (context) =>
-            Effect.sync(() => {
-              capturedMutation.current = context.applyBackgroundTaskMutation;
-            }),
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
-            ownDetachedProcessGroup: true,
-            protocolEvents,
-          }),
-        },
-        selfInvocation,
-        continuationRequests: { offer: () => Effect.void },
-      });
-      const threadId = ThreadId.make("thread-acp-stop-quarantine-late-task");
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-stop-quarantine-late-task"),
-        modelSelection,
-        runtimePolicy,
-      });
-      if (runtime.hasPendingBackgroundWork === undefined) {
-        return yield* Effect.die(
-          "ACP runtime must expose hasPendingBackgroundWork when post-settle continuation is enabled.",
+  it.live.each([false, true])(
+    "direct Stop quarantine drops late task mutations with active tool %s",
+    (activeBackgroundTool) =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const path = yield* Path.Path;
+        const selfInvocation = yield* resolveSelfInvocation();
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
-      }
-      const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
-      const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
-      yield* runtime.events.pipe(
-        Stream.runForEach((event) => Queue.offer(events, event)),
-        Effect.forkScoped,
-      );
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      const now = yield* DateTime.now;
-      yield* runtime
-        .startTurn(
-          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
-        )
-        .pipe(Effect.forkScoped);
-      yield* Stream.fromQueue(protocolEvents).pipe(
-        Stream.filter(
-          (event) =>
-            event.direction === "outgoing" && rawProtocolMethod(event) === "session/prompt",
-        ),
-        Stream.runHead,
-      );
-      const applyMutation = capturedMutation.current;
-      if (applyMutation === null) {
-        return yield* Effect.die("registerExtensions must capture applyBackgroundTaskMutation");
-      }
-      yield* applyMutation({
-        sessionId: "mock-session-1",
-        taskId: "task-pre-stop",
-        status: "running",
-      });
-      assert.isTrue(
-        yield* hasPendingBackgroundWork,
-        "a running background task mutation on the root session must track before Stop",
-      );
-      yield* applyMutation({
-        sessionId: "mock-session-1",
-        taskId: "task-pre-stop",
-        status: "completed",
-      });
-      assert.isFalse(
-        yield* hasPendingBackgroundWork,
-        "a completed background task mutation must clear pending background work",
-      );
-
-      const providerTurnId = idAllocator.derive.providerTurn({
-        driver: ACP_TEST_DRIVER,
-        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
-      });
-      yield* runtime.interruptTurn({ providerThread, providerTurnId, requestRuntimeRestart: true });
-      let terminalStatus: string | null = null;
-      while (terminalStatus === null) {
-        const event = yield* Queue.take(events);
-        if (event.type === "turn.terminal" && event.providerTurnId === providerTurnId) {
-          terminalStatus = event.status;
+        const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
+        const instanceId = ProviderInstanceId.make("acp-test");
+        const capturedMutation: {
+          current:
+            | ((mutation: {
+                readonly sessionId: string;
+                readonly taskId: string;
+                readonly status: "running" | "completed" | "failed";
+              }) => Effect.Effect<void>)
+            | null;
+        } = { current: null };
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            enablePostSettleContinuation: true,
+            extractBackgroundTaskId: (tool) =>
+              tool.toolCallId === "tool-call-long-running-1" ? "independent-task" : undefined,
+            restartRuntimeAfterInterrupt: true,
+            terminateRuntimeProcessGroupOnInterrupt: true,
+            preserveRuntimeOnSettledInterrupt: true,
+            registerExtensions: (context) =>
+              Effect.sync(() => {
+                capturedMutation.current = context.applyBackgroundTaskMutation;
+              }),
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              environment: activeBackgroundTool
+                ? { T3_ACP_EMIT_ACTIVE_TOOL_THEN_HANG: "1" }
+                : { T3_ACP_HANG_PROMPT_FOREVER: "1" },
+              ownDetachedProcessGroup: true,
+              protocolEvents,
+            }),
+          },
+          selfInvocation,
+          continuationRequests: { offer: () => Effect.void },
+        });
+        const threadId = ThreadId.make("thread-acp-stop-quarantine-late-task");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(
+            "provider-session-acp-stop-quarantine-late-task",
+          ),
+          modelSelection,
+          runtimePolicy,
+        });
+        if (runtime.hasPendingBackgroundWork === undefined) {
+          return yield* Effect.die(
+            "ACP runtime must expose hasPendingBackgroundWork when post-settle continuation is enabled.",
+          );
         }
-      }
-      assert.equal(terminalStatus, "interrupted");
+        const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
+        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => Queue.offer(events, event)),
+          Effect.forkScoped,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime
+          .startTurn(
+            makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* Stream.fromQueue(protocolEvents).pipe(
+          Stream.filter(
+            (event) =>
+              event.direction === "outgoing" && rawProtocolMethod(event) === "session/prompt",
+          ),
+          Stream.runHead,
+        );
+        if (activeBackgroundTool) {
+          while (true) {
+            const event = yield* Queue.take(events);
+            if (
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "tool-call-long-running-1" &&
+              event.turnItem.status === "running"
+            )
+              break;
+          }
+        }
+        const applyMutation = capturedMutation.current;
+        if (applyMutation === null) {
+          return yield* Effect.die("registerExtensions must capture applyBackgroundTaskMutation");
+        }
+        yield* applyMutation({
+          sessionId: "mock-session-1",
+          taskId: "task-pre-stop",
+          status: "running",
+        });
+        assert.isTrue(
+          yield* hasPendingBackgroundWork,
+          "a running background task mutation on the root session must track before Stop",
+        );
+        yield* applyMutation({
+          sessionId: "mock-session-1",
+          taskId: "task-pre-stop",
+          status: "completed",
+        });
+        assert.equal(
+          yield* hasPendingBackgroundWork,
+          activeBackgroundTool,
+          "completing one task must preserve an independent running command",
+        );
 
-      yield* applyMutation({
-        sessionId: "mock-session-1",
-        taskId: "task-late-after-stop",
-        status: "running",
-      });
-      assert.isFalse(
-        yield* hasPendingBackgroundWork,
-        "direct Stop quarantine must drop residual background task mutations from the stopped run",
-      );
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
+        const providerTurnId = idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
+        });
+        yield* runtime.interruptTurn({
+          providerThread,
+          providerTurnId,
+          requestRuntimeRestart: true,
+        });
+        let terminalStatus: string | null = null;
+        while (terminalStatus === null) {
+          const event = yield* Queue.take(events);
+          if (event.type === "turn.terminal" && event.providerTurnId === providerTurnId) {
+            terminalStatus = event.status;
+          }
+        }
+        assert.equal(terminalStatus, "interrupted");
+        assert.isFalse(yield* hasPendingBackgroundWork, "confirmed Stop must clear active work");
+
+        yield* applyMutation({
+          sessionId: "mock-session-1",
+          taskId: "task-late-after-stop",
+          status: "running",
+        });
+        assert.isFalse(
+          yield* hasPendingBackgroundWork,
+          "direct Stop quarantine must drop residual background task mutations from the stopped run",
+        );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -7155,18 +8564,20 @@ describe("AcpAdapterV2", () => {
         let backgroundItem: ProviderAdapter.ProviderAdapterV2Event | undefined;
         let checkpoint = 0;
         const assertCommand = Effect.fnUntraced(function* (expectedStatus: string, output: string) {
-          const title = `Checkpoint ${++checkpoint}`;
-          // A later tool event fences the emitted updates without waiting for a terminal that may never come.
-          yield* update({ sessionUpdate: "tool_call_update", toolCallId: "blocker", title });
+          const checkpointId = `checkpoint-${++checkpoint}`;
+          // A separate completed tool fences updates even when normalization replaces its title.
+          yield* update({
+            sessionUpdate: "tool_call",
+            toolCallId: checkpointId,
+            title: "Checkpoint",
+            kind: "other",
+            status: "completed",
+          });
           while (true) {
             const event = yield* Queue.take(events);
             if (event.type !== "turn_item.updated") continue;
             if (event.turnItem.nativeItemRef?.nativeId === "early") backgroundItem = event;
-            if (
-              event.turnItem.nativeItemRef?.nativeId === "blocker" &&
-              event.turnItem.title === title
-            )
-              break;
+            if (event.turnItem.nativeItemRef?.nativeId === checkpointId) break;
           }
           assert.equal(backgroundItem?.type, "turn_item.updated");
           if (backgroundItem?.type !== "turn_item.updated") return;
@@ -7243,12 +8654,19 @@ describe("AcpAdapterV2", () => {
           capabilities: AcpProviderCapabilitiesV2,
           restartRuntimeAfterInterrupt: true,
           terminateRuntimeProcessGroupOnInterrupt: true,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
-            protocolEvents,
-          }),
+          makeRuntime: (input) =>
+            makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
+              protocolEvents,
+            })(input).pipe(
+              Effect.map((runtime) => {
+                const { terminateProcessGroup: _terminateProcessGroup, ...withoutTeardown } =
+                  runtime;
+                return withoutTeardown;
+              }),
+            ),
         },
         selfInvocation,
       });
@@ -7334,6 +8752,7 @@ describe("AcpAdapterV2", () => {
             childProcessSpawner,
             mockAgentPath,
             ownDetachedProcessGroup: true,
+            ownDescendantProcessGroups: false,
             processGroupPlatform: "win32",
             windowsProcessTreeTerminator: () =>
               Deferred.succeed(teardownStarted, undefined).pipe(

@@ -1595,6 +1595,13 @@ const program = Effect.gen(function* () {
       }
 
       if (emitActiveToolThenHang || activeToolOutcome !== undefined) {
+        if (process.env.T3_ACP_CREATE_CLIENT_TERMINAL === "1") {
+          yield* agent.raw.request("terminal/create", {
+            sessionId: requestedSessionId,
+            command: process.execPath,
+            args: ["-e", "setInterval(() => {}, 1000)"],
+          });
+        }
         const toolCallId = "tool-call-long-running-1";
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,

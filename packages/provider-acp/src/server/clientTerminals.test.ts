@@ -1,3 +1,7 @@
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as EffectAcpErrors from "effect-acp/errors";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -19,6 +23,60 @@ const withTerminals = <A, E>(use: (terminals: AcpClientTerminals) => Effect.Effe
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
 
 describe("AcpClientTerminals", () => {
+  it.live("drains an admitted spawn and rejects stale creates when Stop disposes terminals", () =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const started = yield* Deferred.make<void>();
+      const releaseSpawn = yield* Deferred.make<void>();
+      const children: Array<ReturnType<typeof ChildProcessSpawner.makeHandle>> = [];
+      let stopped = false;
+      const delayedSpawner = ChildProcessSpawner.make((command) =>
+        spawner.spawn(command).pipe(
+          Effect.tap((handle) =>
+            Effect.sync(() => {
+              children.push(handle);
+            }),
+          ),
+          Effect.tap(() => Deferred.succeed(started, undefined)),
+          Effect.tap(() => Deferred.await(releaseSpawn)),
+        ),
+      );
+      const terminals = yield* makeAcpClientTerminals({ defaultCwd: process.cwd() }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, delayedSpawner),
+      );
+      yield* Effect.addFinalizer(() =>
+        Deferred.succeed(releaseSpawn, undefined).pipe(Effect.andThen(terminals.disposeAll)),
+      );
+      const admission = Effect.suspend(() =>
+        stopped
+          ? Effect.fail(EffectAcpErrors.AcpRequestError.internalError("stopped generation"))
+          : Effect.void,
+      );
+      const request = {
+        sessionId: "session",
+        command: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1000)"],
+      };
+      const creating = yield* terminals.create(request, admission).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      expect(yield* children[0]!.isRunning).toBe(true);
+      stopped = true;
+      const disposing = yield* terminals.disposeAll.pipe(Effect.forkChild);
+      const stale = yield* terminals
+        .create(request, admission)
+        .pipe(Effect.result, Effect.forkChild);
+      expect(disposing.pollUnsafe()).toBeUndefined();
+      yield* Deferred.succeed(releaseSpawn, undefined);
+      yield* Fiber.join(creating);
+      yield* Fiber.join(disposing);
+      const rejected = yield* Fiber.join(stale);
+      expect(Result.isFailure(rejected)).toBe(true);
+      expect(children).toHaveLength(1);
+      yield* Effect.ignore(children[0]!.exitCode);
+      expect(yield* children[0]!.isRunning).toBe(false);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect("runs a command, buffers output, and reports the exit status", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {

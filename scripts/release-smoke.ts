@@ -233,7 +233,13 @@ try {
     },
   );
 
-  NodeFS.rmSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), { force: true });
+  // Exercise a release against the committed dependency graph. Fresh resolution can
+  // upgrade dependencies past the exact versions targeted by the repository's patches.
+  assertContains(
+    NodeFS.readFileSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), "utf8"),
+    "lockfileVersion:",
+    "Expected the committed dependency lockfile in the release fixture.",
+  );
 
   NodeChildProcess.execFileSync("vp", ["install", "--lockfile-only", "--ignore-scripts"], {
     cwd: tempRoot,
