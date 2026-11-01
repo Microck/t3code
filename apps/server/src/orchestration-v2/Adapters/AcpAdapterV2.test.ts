@@ -7247,7 +7247,7 @@ describe("AcpAdapterV2", () => {
               childProcessSpawner,
               mockAgentPath,
               environment: activeBackgroundTool
-                ? { T3_ACP_EMIT_ACTIVE_TOOL_THEN_HANG: "1" }
+                ? { T3_ACP_ACTIVE_TOOL_OUTCOME: "hang" }
                 : { T3_ACP_HANG_PROMPT_FOREVER: "1" },
               ownDetachedProcessGroup: true,
               protocolEvents,
