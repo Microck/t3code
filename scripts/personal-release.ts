@@ -100,6 +100,10 @@ const fixes: ReadonlyArray<{
     commit: "6f6003453ed310333426c5cb42984a9fb46b48e9",
     label: "Fail waiting foreground tools when native ACP work ends with an error",
   },
+  {
+    commit: "3dd23cf4720aca0fe56b999f4750be728e23b57c",
+    label: "Wait for acknowledged ACP session loads before publishing their model catalog",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
