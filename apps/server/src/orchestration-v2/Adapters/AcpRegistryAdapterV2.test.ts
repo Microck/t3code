@@ -1917,6 +1917,67 @@ describe("AcpRegistryAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.effect.each([false, true])(
+    "fails Claude's waiting foreground tool on idle error (child: %s)",
+    (withChild) =>
+      Effect.gen(function* () {
+        const gate = makeProviderReplayGate(["child-done"]);
+        const session = yield* openClaudeReplaySession(
+          [
+            ...claudeFrames.open,
+            ...claudeFrames.prompt(1),
+            ...(withChild ? claudeChild : []),
+            claudeFrames.update(CLAUDE_ROOT_SESSION, {
+              sessionUpdate: "state_update",
+              state: "requires_action",
+            }),
+            claudeFrames.update(CLAUDE_ROOT_SESSION, {
+              sessionUpdate: "state_update",
+              state: "idle",
+              stopReason: "error",
+              error: { code: -32603, message: "Provider failed while waiting" },
+            }),
+            {
+              ...claudeFrames.childState(CLAUDE_ROOT_SESSION, "child-1", "idle"),
+              label: "child-done",
+            },
+            claudeMarker("child settled"),
+          ],
+          gate,
+        );
+        yield* session.runtime.startTurn(session.turnInput(1));
+        const failed = yield* session.until((event) => event.type === "turn.terminal");
+        const terminal = failed.at(-1)!;
+        if (terminal.type !== "turn.terminal") throw new Error("Missing failed terminal");
+        assert.equal(terminal.status, "failed");
+        const waiting = failed.filter(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId?.endsWith(":requires-action"),
+        );
+        assert.isAtLeast(waiting.length, 2);
+        const last = waiting.at(-1)!;
+        if (last.type !== "turn_item.updated") throw new Error("Missing waiting tool");
+        assert.equal(last.turnItem.status, "failed");
+        if (withChild) {
+          assert.isTrue(yield* session.runtime.hasPendingBackgroundWork!);
+          assert.isFalse(
+            failed.some(
+              (event) => event.type === "subagent.updated" && event.subagent.status === "failed",
+            ),
+          );
+          gate.release("child-done");
+          const settled = yield* session.throughMarker("child settled");
+          assert.isTrue(
+            settled.some(
+              (event) => event.type === "subagent.updated" && event.subagent.status === "completed",
+            ),
+          );
+          assert.isFalse(settled.some((event) => event.type === "turn.terminal"));
+        }
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("settles Claude's accepted foreground reply while retaining child output", () =>
     Effect.gen(function* () {
       const gate = makeProviderReplayGate(["accepted", "child-output", "wake"]);
