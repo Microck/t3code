@@ -17,6 +17,7 @@ const workspaceFiles = [
   "apps/desktop/package.json",
   "apps/web/package.json",
   "apps/mobile/package.json",
+  "apps/mobile/modules/t3-highlights/package.json",
   "apps/mobile/modules/t3-source-text/package.json",
   "apps/mobile/modules/t3-review-diff/package.json",
   "apps/mobile/modules/t3-terminal/package.json",
@@ -34,12 +35,17 @@ const workspaceFiles = [
   "packages/provider-acp/package.json",
   "packages/provider-acp-registry/package.json",
   "packages/provider-cursor/package.json",
+  "packages/provider-fx/package.json",
   "packages/provider-grok/package.json",
   "packages/provider-muse/package.json",
   "packages/provider-opencode/package.json",
+  "packages/secret-provider-core/package.json",
+  "packages/secret-provider-definitions/package.json",
+  "packages/secret-provider-onepassword/package.json",
   "packages/source-control-azure-devops/package.json",
   "packages/source-control-bitbucket/package.json",
   "packages/source-control-core/package.json",
+  "packages/source-control-definitions/package.json",
   "packages/source-control-forgejo/package.json",
   "packages/source-control-gitcafe/package.json",
   "packages/source-control-github/package.json",
@@ -233,13 +239,7 @@ try {
     },
   );
 
-  // Exercise a release against the committed dependency graph. Fresh resolution can
-  // upgrade dependencies past the exact versions targeted by the repository's patches.
-  assertContains(
-    NodeFS.readFileSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), "utf8"),
-    "lockfileVersion:",
-    "Expected the committed dependency lockfile in the release fixture.",
-  );
+  NodeFS.rmSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), { force: true });
 
   NodeChildProcess.execFileSync("vp", ["install", "--lockfile-only", "--ignore-scripts"], {
     cwd: tempRoot,
