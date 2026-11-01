@@ -96,6 +96,10 @@ const fixes: ReadonlyArray<{
     commit: "bbf3fcd21d6832c03a616dc5a09b36274ebece0c",
     label: "Confirm Stop for every owned ACP runtime and client terminal",
   },
+  {
+    commit: "dc1e272ff5890f4c42fd25ca7ba1910b34f1b70d",
+    label: "Fail waiting foreground tools when native ACP work ends with an error",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
