@@ -2,6 +2,7 @@ import type { ToolCallDiffTarget } from "../../diffPanelStore";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import {
   readOmpTaskProgress,
+  ompTaskOutputText,
   toolCallLines,
   turnItemDetailRevision,
   turnItemNeedsDetailFetch,
@@ -130,7 +131,7 @@ function useFetchedTurnItem(
     item,
     ompTask,
     output: {
-      output: ompTask ? ompTask.text : turnItemOutputText(item),
+      output: ompTask ? ompTaskOutputText(ompTask) : turnItemOutputText(item),
       images: turnItemOutputImages(item),
       environmentId,
       pending: item === wireItem && detail.isPending,
@@ -140,7 +141,7 @@ function useFetchedTurnItem(
           : detail.data?.item === null
             ? "Output is no longer available."
             : detail.error,
-      empty: fetches && item !== wireItem,
+      empty: fetches && item !== wireItem && ompTask === null,
     },
   };
 }

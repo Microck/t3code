@@ -50,6 +50,18 @@ const OmpWaitJob = Schema.Struct({
   status: Schema.Literals(["running", "completed", "failed", "cancelled"]),
   label: Schema.String,
   durationMs: Schema.Number,
+  stage: Schema.optionalKey(Schema.String),
+  requests: Schema.optionalKey(Schema.Finite),
+  cost: Schema.optionalKey(Schema.Finite),
+  contextTokens: Schema.optionalKey(Schema.Finite),
+  contextWindow: Schema.optionalKey(Schema.Finite),
+  widget: Schema.optionalKey(
+    Schema.Struct({
+      title: Schema.String,
+      stage: Schema.optionalKey(Schema.String),
+      updatedAt: Schema.Finite,
+    }),
+  ),
   resolvedModel: Schema.optionalKey(Schema.String),
   resolvedModelIdentity: Schema.optionalKey(Schema.String),
   resolvedThinkingLevel: Schema.optionalKey(Schema.String),
@@ -85,6 +97,27 @@ const compactCount = new Intl.NumberFormat("en-US", {
   notation: "compact",
   maximumFractionDigits: 1,
 });
+
+export function ompJobMetrics(job: OmpWaitJob): string {
+  return [
+    ...(job.requests === undefined ? [] : [`${job.requests} requests`]),
+    ...(job.contextTokens === undefined
+      ? []
+      : [
+          `context ${compactCount.format(job.contextTokens)}${job.contextWindow === undefined ? "" : ` / ${compactCount.format(job.contextWindow)}`}`,
+        ]),
+    ...(job.cost === undefined ? [] : [`$${job.cost.toFixed(4)}`]),
+  ].join(" · ");
+}
+
+export function ompTaskOutputText(progress: OmpTaskProgress): string | null {
+  if (progress.text !== null) return progress.text;
+  const running =
+    progress.kind === "jobs"
+      ? progress.jobs.some((job) => job.status === "running")
+      : progress.agents.some((agent) => agent.status === "running" || agent.status === "pending");
+  return running ? "Waiting for task result." : null;
+}
 
 export function ompAgentMetrics(agent: OmpAgentProgress): string {
   return [
