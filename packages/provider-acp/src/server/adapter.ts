@@ -3772,7 +3772,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               (projectedStatus === undefined ||
                 nativeStatus === "completed" ||
                 nativeStatus === "failed" ||
-                nativeStatus === "interrupted" ||
                 retainedRpcTools.get(retainedKey) === context)
             )
               yield* markBackgroundTaskEnded(registeredTaskId);
