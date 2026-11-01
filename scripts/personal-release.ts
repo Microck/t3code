@@ -104,6 +104,10 @@ const fixes: ReadonlyArray<{
     commit: "3dd23cf4720aca0fe56b999f4750be728e23b57c",
     label: "Wait for acknowledged ACP session loads before publishing their model catalog",
   },
+  {
+    commit: "60ae78109e5f5eac13702dc98f625e020dc26561",
+    label: "Show native OMP activity and metrics while waiting for task results",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
