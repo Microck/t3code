@@ -71,10 +71,7 @@ import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
-// How long a successful discovery probe stays valid. Periodic health
-// refreshes reuse it instead of spawning a fresh disposable ACP session;
-// failed or unauthenticated probes are never cached so a completed sign-in
-// is detected on the next refresh.
+// Cache only successful authenticated probes so sign-in changes remain visible.
 const PROBE_SUCCESS_TTL_MS = 15 * 60 * 1_000;
 const EMPTY_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
@@ -221,9 +218,6 @@ function baseSnapshot(
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     ...(iconUrl ? { iconUrl } : {}),
     continuation: { groupKey: input.continuationKey },
-    // The registry driver rejects every application text-generation operation,
-    // so selectors must not offer these instances for commit, PR, branch, or
-    // title generation.
     supportsTextGeneration: false,
     enabled: input.settings.enabled,
     installed: input.installed,
@@ -348,9 +342,7 @@ export function buildCheckedAcpRegistrySnapshot(
       : {}),
     installed: readiness.installed,
     version: readiness.version,
-    // A failed discovery probe on a ready installation is a warning, not an
-    // outage: the agent binary is present and a real turn may still work
-    // (for example after the user completes authentication).
+    // Failed discovery is a warning: an installed agent may still run real turns.
     status: probeFailed ? "warning" : readiness.status,
     auth: input.probe
       ? {
@@ -688,7 +680,12 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: () => checkProvider,
       checkProvider,
-      enrichSnapshot: ({ settings, snapshot, getSnapshot, publishSnapshot }) => {
+      enrichSnapshot: Effect.fn("enrichSnapshot")(function ({
+        settings,
+        snapshot,
+        getSnapshot,
+        publishSnapshot,
+      }) {
         const withVersionAdvisory = (provider: ServerProvider) =>
           resolveMaintenance().pipe(
             Effect.flatMap((capabilities) =>
@@ -707,7 +704,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                   : effectiveConfig.agentId,
                 enrichProviderCached(snapshot),
               )
-            : enrichProviderCached(snapshot).pipe(Effect.map(Option.some))
+            : enrichProviderCached(snapshot).pipe(Effect.asSome)
         ).pipe(
           Effect.flatMap(
             Option.match({
@@ -782,7 +779,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             discard: true,
           },
         );
-      },
+      }),
     }).pipe(
       Effect.mapError(
         (cause) =>
