@@ -25,7 +25,6 @@ describe("appendTerminalOutput", () => {
   });
 
   it("redraws several lines in place when the cursor moves up", () => {
-    // docker pull / pnpm style: print two bars, move up two lines, redraw both.
     const frames = [
       "layer a: 10%\nlayer b: 10%\n",
       "\u001b[2A\u001b[2Klayer a: 60%\n\u001b[2Klayer b: 40%\n",
@@ -53,6 +52,9 @@ describe("appendTerminalOutput", () => {
     expect(state.text.length).toBeLessThanOrEqual(1_000);
     expect(state.text.startsWith("line ")).toBe(true);
     expect(state.text.endsWith("line 1999")).toBe(true);
+    // A newline a quarter of the budget past the cut is too far to start on.
+    expect(feed(["abcdefgh\nij\nklmnop"], 8).text).toBe("klmnop");
+    expect(feed(["abcdefgh\nijk\nlmnop"], 8).text).toBe("jk\nlmnop");
   });
 
   it("stays bounded across many appends of huge output, including one endless line", () => {
@@ -115,7 +117,6 @@ describe("appendTerminalOutput under adversarial output", () => {
 
 describe("terminalOutputResumeText", () => {
   it("lets a viewer that starts from it apply later chunks exactly as the source does", () => {
-    // Mid-redraw: cursor two lines up, a colour on, and half an escape pending.
     const chunks = [
       "a: 1%\nb: 1%\n",
       "\u001b[2A\u001b[2K\u001b[33ma: 5",

@@ -1,7 +1,9 @@
 import type { Paragraph, PhrasingContent, Root, RootContent } from "mdast";
-import type { Processor } from "unified";
-import { isWindowsAbsolutePath } from "./path.ts";
-import type { PluggableList } from "unified";
+import { remarkKeepWindowsPaths } from "./markdownWindowsPaths.ts";
+import { type PluggableList, type Processor, unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkRehype from "remark-rehype";
+import { find, html } from "property-information";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
@@ -12,7 +14,7 @@ import {
   CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES,
   remarkCodexDirectives,
 } from "./codexMarkdownDirectives.ts";
-import { isWindowsDrivePathHref } from "./markdownLinks.ts";
+import { isWindowsDrivePathHref, normalizeMarkdownLinkDestination } from "./markdownLinks.ts";
 import { THREAD_LINK_PROTOCOL } from "./threadLinks.ts";
 
 type MarkdownImageHastNode = {
@@ -67,8 +69,7 @@ function rehypePreserveBareAnchorPlaceholders() {
     let rawTextTag: string | undefined;
     const visit = (node: MarkdownImageHastNode) => {
       if (node.type === "raw" && typeof node.value === "string") {
-        // Raw blocks can contain several tags. Consume whole tags, quoted attributes,
-        // and comments so text resembling a closing anchor cannot pair a placeholder.
+        // Scan whole tags, attributes, and comments so embedded closing-anchor text cannot match a placeholder.
         const tags = /<!--[\s\S]*?(?:-->|$)|<\/?[A-Za-z](?:[^"'<>]|"[^"]*"|'[^']*')*>/g;
         let offset = 0;
         while (rawTextTag !== "plaintext") {
@@ -108,11 +109,44 @@ function rehypePreserveBareAnchorPlaceholders() {
   };
 }
 
+const COLOR_SCHEME_MEDIA = /^\(\s*prefers-color-scheme\s*:\s*(dark|light)\s*\)$/i;
+
+/**
+ * The renderer resolves an `<img>`'s `src` (workspace files, host media) but never a `<source>`'s
+ * `srcset`, which would load unresolved whenever its media matched. A color-scheme source moves
+ * onto the `<img>` for the renderer to pick by theme; every source is then dropped.
+ */
+function moveColorSchemeSourcesToImage(picture: MarkdownImageHastNode) {
+  if (!picture.children) return;
+  const image = picture.children.find((child) => child.tagName === "img");
+  for (const source of picture.children) {
+    if (source.tagName !== "source" || !image) continue;
+    const media = source.properties?.media;
+    const scheme = typeof media === "string" ? COLOR_SCHEME_MEDIA.exec(media)?.[1] : undefined;
+    const srcSet = source.properties?.srcSet;
+    const candidate = Array.isArray(srcSet) ? srcSet[0] : srcSet;
+    // A candidate's URL runs to the first space (a descriptor such as `2x` may follow).
+    const url =
+      typeof candidate === "string" ? candidate.trim().split(/\s/, 1)[0]?.replace(/,+$/, "") : "";
+    const key = scheme?.toLowerCase() === "dark" ? "dataDarkSrc" : "dataLightSrc";
+    // As in a browser, the first source that matches a scheme is the one shown.
+    if (scheme && url && image.properties?.[key] === undefined) {
+      // The sanitizer reads a drive letter as a protocol; as a file URL it resolves to the same path.
+      const value = isWindowsDrivePathHref(url) ? `file:///${url.replaceAll("\\", "/")}` : url;
+      image.properties = { ...image.properties, [key]: value };
+    }
+  }
+  picture.children = picture.children.filter((child) => child.tagName !== "source");
+}
+
 function rehypePreserveImageSourceMeta() {
   return (tree: MarkdownImageHastNode) => {
     const visit = (node: MarkdownImageHastNode) => {
       const src = node.properties?.src;
       const title = node.properties?.title;
+      if (node.type === "element" && node.tagName === "picture") {
+        moveColorSchemeSourcesToImage(node);
+      }
       if (node.type === "element" && node.tagName === "img") {
         node.properties = {
           ...node.properties,
@@ -127,6 +161,8 @@ function rehypePreserveImageSourceMeta() {
     markStandaloneImages(tree);
   };
 }
+
+const IMAGE_SRC_PROTOCOLS = [...(defaultSchema.protocols?.src ?? []), "file", "t3-context"];
 
 const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   ...defaultSchema,
@@ -144,6 +180,8 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     a: [...(defaultSchema.attributes?.a ?? []), "dataPullRequestAutolink"],
     img: [
       ...(defaultSchema.attributes?.img ?? []),
+      "dataDarkSrc",
+      "dataLightSrc",
       "dataLocalSrc",
       "dataMarkdownTitle",
       "dataStandalone",
@@ -158,7 +196,9 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
       "t3-context",
       THREAD_LINK_PROTOCOL,
     ],
-    src: [...(defaultSchema.protocols?.src ?? []), "file", "t3-context"],
+    src: IMAGE_SRC_PROTOCOLS,
+    dataDarkSrc: IMAGE_SRC_PROTOCOLS,
+    dataLightSrc: IMAGE_SRC_PROTOCOLS,
   },
 } satisfies Parameters<typeof rehypeSanitize>[0];
 
@@ -185,9 +225,79 @@ export const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS: PluggableList = [
   remarkNormalizeLinksAndTagInlineCode,
 ];
 
+// Start tags an HTML parser closes an open `<p>` for.
+const CLOSES_PARAGRAPH = new Set(
+  "address article aside blockquote center details dialog dir div dl fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr li listing main menu nav ol p plaintext pre search section summary table ul xmp dd dt".split(
+    " ",
+  ),
+);
+const HEADING = /^h[1-6]$/;
+
+interface HtmlScope {
+  readonly anchor: boolean;
+  readonly paragraph: boolean;
+  readonly heading: boolean;
+}
+
+/**
+ * Whether the tree needs the HTML parser: raw HTML, or nesting it repairs (a footnote call in a
+ * link label nests `<a>`). Otherwise it only rewrites properties as hast-util-to-parse5 does and
+ * drops `data`, both repeated here, and moves blank text that renders the same.
+ */
+function needsHtmlParser(node: MarkdownImageHastNode, scope: HtmlScope): boolean {
+  if (node.type === "raw") return true;
+  let inner = scope;
+  if (node.type === "element" && node.tagName) {
+    const { tagName } = node;
+    const heading = HEADING.test(tagName);
+    if (
+      (tagName === "a" && scope.anchor) ||
+      (scope.paragraph && CLOSES_PARAGRAPH.has(tagName)) ||
+      (heading && scope.heading)
+    ) {
+      return true;
+    }
+    inner = {
+      anchor: scope.anchor || tagName === "a",
+      paragraph: scope.paragraph || tagName === "p",
+      heading: scope.heading || heading,
+    };
+    const properties = node.properties ?? {};
+    for (const key of Object.keys(properties)) {
+      const value = properties[key];
+      const info = find(html, key);
+      if (
+        value === false ||
+        value === null ||
+        value === undefined ||
+        Number.isNaN(value) ||
+        (!value && info.boolean)
+      ) {
+        delete properties[key];
+      } else if (value === true && !info.boolean && !info.overloadedBoolean) {
+        properties[key] = "";
+      }
+    }
+    delete (node as { data?: unknown }).data;
+  }
+  return (node.children ?? []).some((child) => needsHtmlParser(child, inner));
+}
+
+const TOP_SCOPE: HtmlScope = { anchor: false, paragraph: false, heading: false };
+
+/** rehype-raw reparses the whole tree through an HTML parser, which most trees can skip. */
+function rehypeRawWhenPresent(this: Processor) {
+  const transform = rehypeRaw.call(this) as unknown as (
+    tree: MarkdownImageHastNode,
+    file: unknown,
+  ) => unknown;
+  return (tree: MarkdownImageHastNode, file: unknown) =>
+    needsHtmlParser(tree, TOP_SCOPE) ? transform(tree, file) : undefined;
+}
+
 export const CHAT_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   rehypePreserveBareAnchorPlaceholders,
-  rehypeRaw,
+  rehypeRawWhenPresent,
   rehypePreserveImageSourceMeta,
   [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],
 ];
@@ -209,6 +319,7 @@ const startsLine = (node: PhrasingContent | undefined) =>
 
 function breakLinesAroundImages(paragraph: Paragraph) {
   const children = paragraph.children;
+  if (!children.some(isImageNode)) return;
   const ownsLine = (index: number) =>
     isImageNode(children[index]) &&
     endsLine(children[index - 1]) &&
@@ -303,56 +414,50 @@ function remarkNormalizeLinksAndTagInlineCode() {
   };
 }
 
-interface DestinationCompileContext {
-  readonly stack: ReadonlyArray<{ readonly type: string; url?: string }>;
-  resume(): string;
-  sliceSerialize(token: unknown): string;
+export function shouldPreserveAssistantLineBreaks(text: string): boolean {
+  return /^★ Insight(?:\s|─)/mu.test(text);
 }
 
-function keepWindowsPathDestination(this: DestinationCompileContext, token: unknown) {
-  const decoded = this.resume();
-  const authored = this.sliceSerialize(token);
-  const node = this.stack.at(-1);
-  // Character references still need decoding, so those destinations keep the parsed URL.
-  if (node)
-    node.url = isWindowsAbsolutePath(authored) && !authored.includes("&") ? authored : decoded;
-}
+const imageSourceProcessor = unified()
+  .use(remarkParse)
+  .use(CHAT_MARKDOWN_REMARK_PLUGINS)
+  .use(remarkRehype, { allowDangerousHtml: true })
+  .use(CHAT_MARKDOWN_REHYPE_PLUGINS);
 
-// A drive path that has not reached whitespace yet: `C:`, `C:\Users\me`, `C:/work`.
-const UNFINISHED_DRIVE_PATH = /(?:^|\W)[A-Za-z]:(?:[\\/]\S*)?$/;
-
-interface EscapeCompileContext {
-  readonly stack: ReadonlyArray<{
-    readonly type: string;
-    children?: Array<{ type: string; value?: string }>;
-  }>;
-}
-
-function keepWindowsPathEscape(this: EscapeCompileContext) {
-  const text = this.stack.at(-1)?.children?.at(-1);
-  if (text?.type !== "text" || text.value === undefined) return;
-  const before = text.value.slice(0, -1);
-  if (UNFINISHED_DRIVE_PATH.test(before)) text.value = `${before}\\${text.value.slice(-1)}`;
+interface ImageSourceNode {
+  readonly type: string;
+  readonly tagName?: string;
+  readonly properties?: {
+    readonly src?: unknown;
+    readonly dataLocalSrc?: unknown;
+    readonly dataDarkSrc?: unknown;
+    readonly dataLightSrc?: unknown;
+  };
+  readonly children?: ReadonlyArray<ImageSourceNode>;
 }
 
 /**
- * CommonMark reads the `\.` in `C:\me\.t3\shot.png` as an escape. Every backslash in a
- * Windows path is a separator, so link, image, and definition destinations that are
- * Windows paths keep the text as written, and so do escapes inside drive paths in prose.
- * Prose paths end at whitespace: past that, nothing tells a path from a sentence, and
- * `C:\x and \*this\*` must still read `*this*`.
+ * The sources of the images chat markdown shows, read as ChatMarkdown's `img` renderer reads
+ * them. Code, comments, and plain links show no image, so they add none.
  */
-function remarkKeepWindowsPaths(this: Processor) {
-  const data = this.data();
-  (data.fromMarkdownExtensions ??= []).push({
-    exit: {
-      resourceDestinationString: keepWindowsPathDestination,
-      definitionDestinationString: keepWindowsPathDestination,
-      characterEscape: keepWindowsPathEscape,
-    },
-  });
-}
-
-export function shouldPreserveAssistantLineBreaks(text: string): boolean {
-  return /^★ Insight(?:\s|─)/mu.test(text);
+export function chatMarkdownImageSources(markdown: string): Array<string> {
+  const sources: Array<string> = [];
+  const visit = (node: ImageSourceNode) => {
+    if (node.type === "element" && node.tagName === "img") {
+      const { src, dataLocalSrc, dataDarkSrc, dataLightSrc } = node.properties ?? {};
+      // The sanitizer drops a Windows drive path from `src`; the renderer reads it from here.
+      if (typeof dataLocalSrc === "string") {
+        sources.push(normalizeMarkdownLinkDestination(dataLocalSrc).replaceAll("\\", "/"));
+      } else if (typeof src === "string") {
+        sources.push(normalizeMarkdownLinkDestination(src));
+      }
+      // A `<picture>` shows one of these instead, by the viewer's theme.
+      for (const variant of [dataDarkSrc, dataLightSrc]) {
+        if (typeof variant === "string") sources.push(normalizeMarkdownLinkDestination(variant));
+      }
+    }
+    node.children?.forEach(visit);
+  };
+  visit(imageSourceProcessor.runSync(imageSourceProcessor.parse(markdown)) as ImageSourceNode);
+  return sources;
 }
