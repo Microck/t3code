@@ -73,6 +73,8 @@ import {
   turnItemOutputImages,
   turnItemOutputText,
   readOmpTaskProgress,
+  ompJobMetrics,
+  ompTaskOutputText,
   ompAgentMetrics,
   ompAgentStatus,
   type OmpTaskProgress,
@@ -974,7 +976,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
     !expanded || streamsOutput
       ? null
       : ompTask
-        ? ompTask.text
+        ? ompTaskOutputText(ompTask)
         : shownItem.type === "file_search" || shownItem.type === "web_search"
           ? turnItemOutputText(shownItem)
           : fetchedItem
@@ -1569,6 +1571,7 @@ function OmpTaskProgressRows({ progress }: { readonly progress: OmpTaskProgress 
       <View className="gap-2 py-1" accessibilityLabel="Background jobs">
         {progress.jobs.map((job) => {
           const open = expanded.has(job.id);
+          const metrics = open ? ompJobMetrics(job) : "";
           return (
             <View key={job.id} className="gap-1">
               <Pressable
@@ -1590,6 +1593,19 @@ function OmpTaskProgressRows({ progress }: { readonly progress: OmpTaskProgress 
               </Pressable>
               {open ? (
                 <View className="gap-1 pl-3">
+                  {job.widget?.title && job.widget.title !== job.label ? (
+                    <Text selectable className="text-2xs text-foreground">
+                      {job.widget.title}
+                    </Text>
+                  ) : null}
+                  {(job.widget?.stage ?? job.stage) ? (
+                    <Text selectable className="text-2xs text-foreground">
+                      {job.widget?.stage ?? job.stage}
+                    </Text>
+                  ) : null}
+                  {metrics ? (
+                    <Text className="text-2xs text-foreground-muted">{metrics}</Text>
+                  ) : null}
                   <Text selectable className="text-2xs text-foreground-muted">
                     {job.id} · {job.type}
                   </Text>
