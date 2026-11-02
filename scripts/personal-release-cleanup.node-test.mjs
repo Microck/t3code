@@ -105,6 +105,10 @@ test("all pages are read before deletion shifts the listing", async () => {
   assert.equal(f.calls.length, 104);
   assert.match(f.calls[1].url, /page=2$/);
   assert.ok(f.calls.slice(2).every((c) => c.method === "DELETE"));
+  assert.deepEqual(
+    f.calls.slice(3).map(({ url }) => url.split("/t3code/")[1]),
+    Array.from({ length: 101 }, (_, i) => `actions/artifacts/${i + 1}`),
+  );
 });
 
 for (const status of [401, 403, 404, 429]) {

@@ -262,6 +262,7 @@ jobs:
         with:
           node-version: "24"
       - name: Report failures and remove the generated build branch
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           RESULTS: ${{ toJSON(needs) }}
