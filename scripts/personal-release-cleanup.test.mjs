@@ -1,0 +1,108 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { cleanup } from "./personal-release-cleanup.mjs";
+
+const json = (data) => new Response(JSON.stringify(data));
+function fixture(responses, overrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    run: () => cleanup({
+      runId: "42", branch: "personal-build/42-1", token: "test-token",
+      sleep: async () => {}, log: () => {},
+      fetchImpl: async (url, options) => {
+        calls.push({ url, method: options.method });
+        assert.equal(options.redirect, "error");
+        const response = responses.shift();
+        if (response instanceof Error) throw response;
+        assert.ok(response, "Unexpected API request");
+        return response;
+      },
+      ...overrides,
+    }),
+  };
+}
+
+test("empty DELETE bodies succeed and only run-owned objects are deleted", async () => {
+  const f = fixture([json({ artifacts: [{ id: 7 }] }), new Response(null, { status: 204 }), new Response(null, { status: 204 })]);
+  await f.run();
+  assert.deepEqual(f.calls.map(({ method, url }) => [method, url.split("/t3code/")[1]]), [
+    ["GET", "actions/runs/42/artifacts?per_page=100&page=1"],
+    ["DELETE", "git/refs/heads/personal-build/42-1"],
+    ["DELETE", "actions/artifacts/7"],
+  ]);
+});
+
+test("already removed ref and artifact make retries idempotent", async () => {
+  const f = fixture([json({ artifacts: [{ id: 7 }] }), new Response(null, { status: 404 }), new Response(null, { status: 404 })]);
+  await f.run();
+});
+
+test("truncated listing retries before any destructive request", async () => {
+  const f = fixture([new Response("{"), json({ artifacts: [] }), new Response(null, { status: 204 })]);
+  await f.run();
+  assert.deepEqual(f.calls.map((c) => c.method), ["GET", "GET", "DELETE"]);
+});
+
+test("persistent malformed JSON fails visibly without deleting", async () => {
+  const f = fixture([new Response(""), new Response("{"), new Response("invalid")]);
+  await assert.rejects(f.run(), /invalid JSON after 3 attempts/);
+  assert.ok(f.calls.every((c) => c.method === "GET"));
+});
+
+test("all pages are read before deletion shifts the listing", async () => {
+  const first = Array.from({ length: 100 }, (_, i) => ({ id: i + 1 }));
+  const f = fixture([json({ artifacts: first }), json({ artifacts: [{ id: 101 }] }), ...Array.from({ length: 102 }, () => new Response(null, { status: 204 }))]);
+  await f.run();
+  assert.equal(f.calls.length, 104);
+  assert.match(f.calls[1].url, /page=2$/);
+  assert.ok(f.calls.slice(2).every((c) => c.method === "DELETE"));
+});
+
+for (const status of [401, 403, 404, 429]) {
+  test(`listing HTTP ${status} is not treated as an empty run`, async () => {
+    const f = fixture([new Response(null, { status })]);
+    await assert.rejects(f.run(), new RegExp(`HTTP ${status}`));
+    assert.equal(f.calls.length, 1);
+  });
+}
+
+test("transient server and uncertain DELETE transport failures are bounded", async () => {
+  const f = fixture([new Response(null, { status: 502 }), json({ artifacts: [] }), new Error("connection lost"), new Response(null, { status: 404 })]);
+  await f.run();
+  assert.equal(f.calls.length, 4);
+});
+
+test("persistent DELETE error fails instead of masking cleanup failure", async () => {
+  const f = fixture([json({ artifacts: [] }), ...Array.from({ length: 3 }, () => new Response(null, { status: 503 }))]);
+  await assert.rejects(f.run(), /HTTP 503/);
+  assert.equal(f.calls.length, 4);
+});
+
+test("malformed artifact IDs fail before branch deletion", async () => {
+  for (const id of ["7", -1, 1.5, 0, Number.MAX_SAFE_INTEGER + 1]) {
+    const f = fixture([json({ artifacts: [{ id }] })]);
+    await assert.rejects(f.run(), /Invalid artifact ID/);
+    assert.equal(f.calls.length, 1);
+  }
+});
+
+test("missing artifact array is not an empty success", async () => {
+  const f = fixture([json({})]);
+  await assert.rejects(f.run(), /Invalid artifact listing/);
+  assert.equal(f.calls.length, 1);
+});
+
+test("reject unrelated branches, invalid run IDs and missing token before network", async () => {
+  for (const overrides of [{ branch: "main" }, { branch: "personal-build/43-1" }, { branch: "personal-build/42-1/other" }, { runId: "../42" }, { token: "" }]) {
+    const f = fixture([], overrides);
+    await assert.rejects(f.run());
+    assert.equal(f.calls.length, 0);
+  }
+});
+
+test("no-build run has no branch and no artifacts to remove", async () => {
+  const f = fixture([json({ artifacts: [] })], { branch: "" });
+  await f.run();
+  assert.equal(f.calls.length, 1);
+});

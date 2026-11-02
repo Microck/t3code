@@ -1,0 +1,34 @@
+name: Personal release cleanup checks
+
+on:
+  pull_request:
+    paths:
+      - scripts/personal-release-cleanup.mjs
+      - scripts/personal-release-cleanup.test.mjs
+      - .github/workflows/personal-release.yml
+      - .github/workflows/personal-cleanup-check.yml
+  push:
+    branches: [personal-updates]
+    paths:
+      - scripts/personal-release-cleanup.mjs
+      - scripts/personal-release-cleanup.test.mjs
+      - .github/workflows/personal-release.yml
+      - .github/workflows/personal-cleanup-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: node --check scripts/personal-release-cleanup.mjs
+      - run: node --test scripts/personal-release-cleanup.test.mjs
