@@ -249,7 +249,20 @@ jobs:
       contents: write
       issues: write
     steps:
+      - name: Checkout cleanup script
+        env:
+          SOURCE: ${{ github.sha }}
+        run: |
+          git init .
+          git remote add origin https://github.com/Microck/t3code.git
+          git fetch --no-tags --depth=1 origin "$SOURCE"
+          git sparse-checkout set --no-cone '/scripts/personal-release-cleanup.mjs'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
       - name: Report failures and remove the generated build branch
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           RESULTS: ${{ toJSON(needs) }}
@@ -266,11 +279,4 @@ jobs:
               gh issue create --repo Microck/t3code --title 'Personal update needs attention' --body "Update withheld. The installed version is unchanged. Logs: $RUN_URL"
             fi
           fi
-          if [[ "$BRANCH" == personal-build/* ]]; then
-            gh api --method DELETE "repos/Microck/t3code/git/refs/heads/$BRANCH"
-          fi
-          # Release assets are permanent; intermediate Actions artifacts are not needed after the run.
-          gh api "repos/Microck/t3code/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].id' |
-            while read -r artifact; do
-              gh api --method DELETE "repos/Microck/t3code/actions/artifacts/$artifact"
-            done
+          node scripts/personal-release-cleanup.mjs
