@@ -1,4 +1,4 @@
-import { pathToFileURL } from "node:url";
+import * as NodeURL from "node:url";
 
 const repository = "Microck/t3code";
 
@@ -80,7 +80,7 @@ export async function cleanup({
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === NodeURL.pathToFileURL(process.argv[1]).href) {
   await cleanup({
     runId: process.env.RUN_ID ?? "",
     branch: process.env.BRANCH ?? "",
