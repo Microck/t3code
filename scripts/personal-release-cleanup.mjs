@@ -4,7 +4,14 @@ const repository = "Microck/t3code";
 
 // Cleanup is repeatable: an absent generated ref/artifact already meets the goal.
 // Never decode successful DELETE responses, which normally have no JSON body.
-export async function cleanup({ runId, branch, token, fetchImpl = fetch, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), log = console.log }) {
+export async function cleanup({
+  runId,
+  branch,
+  token,
+  fetchImpl = fetch,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  log = console.log,
+}) {
   if (!/^\d+$/.test(runId)) throw new Error("Invalid workflow run ID");
   if (branch && !new RegExp(`^personal-build/${runId}-[1-9]\\d*$`).test(branch)) {
     throw new Error("Refusing to clean a branch outside this workflow run");
@@ -17,7 +24,11 @@ export async function cleanup({ runId, branch, token, fetchImpl = fetch, sleep =
       try {
         response = await fetchImpl(`https://api.github.com/repos/${repository}/${path}`, {
           method,
-          headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
           signal: AbortSignal.timeout(15_000),
           redirect: "error",
         });
@@ -53,7 +64,8 @@ export async function cleanup({ runId, branch, token, fetchImpl = fetch, sleep =
     const data = await request(`actions/runs/${runId}/artifacts?per_page=100&page=${page}`);
     if (!Array.isArray(data.artifacts)) throw new Error("Invalid artifact listing");
     for (const artifact of data.artifacts) {
-      if (!Number.isSafeInteger(artifact.id) || artifact.id <= 0) throw new Error("Invalid artifact ID");
+      if (!Number.isSafeInteger(artifact.id) || artifact.id <= 0)
+        throw new Error("Invalid artifact ID");
       artifacts.add(artifact.id);
     }
     if (data.artifacts.length < 100) break;
@@ -69,5 +81,9 @@ export async function cleanup({ runId, branch, token, fetchImpl = fetch, sleep =
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await cleanup({ runId: process.env.RUN_ID ?? "", branch: process.env.BRANCH ?? "", token: process.env.GH_TOKEN });
+  await cleanup({
+    runId: process.env.RUN_ID ?? "",
+    branch: process.env.BRANCH ?? "",
+    token: process.env.GH_TOKEN,
+  });
 }
