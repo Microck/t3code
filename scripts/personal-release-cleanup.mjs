@@ -50,9 +50,12 @@ export async function cleanup({
         throw new Error(`${method} ${path}: HTTP ${response.status}`);
       }
       try {
-        return await response.json();
+        const data = await response.json();
+        if (!Array.isArray(data?.artifacts)) throw new Error("Invalid artifact listing");
+        return data;
       } catch {
-        if (attempt === 2) throw new Error(`GET ${path}: invalid JSON after 3 attempts`);
+        if (attempt === 2)
+          throw new Error(`GET ${path}: invalid JSON or artifact listing after 3 attempts`);
         await sleep(1000 * (attempt + 1));
       }
     }
@@ -62,7 +65,6 @@ export async function cleanup({
   const artifacts = new Set();
   for (let page = 1; ; page++) {
     const data = await request(`actions/runs/${runId}/artifacts?per_page=100&page=${page}`);
-    if (!Array.isArray(data.artifacts)) throw new Error("Invalid artifact listing");
     for (const artifact of data.artifacts) {
       if (!Number.isSafeInteger(artifact.id) || artifact.id <= 0)
         throw new Error("Invalid artifact ID");

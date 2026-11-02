@@ -93,7 +93,7 @@ NodeTest.test("truncated listing retries before any destructive request", async 
 
 NodeTest.test("persistent malformed JSON fails visibly without deleting", async () => {
   const f = fixture([new Response(""), new Response("{"), new Response("invalid")]);
-  await NodeAssert.rejects(f.run(), /invalid JSON after 3 attempts/);
+  await NodeAssert.rejects(f.run(), /invalid JSON or artifact listing after 3 attempts/);
   NodeAssert.ok(f.calls.every((c) => c.method === "GET"));
 });
 
@@ -151,9 +151,10 @@ NodeTest.test("malformed artifact IDs fail before branch deletion", async () => 
 });
 
 NodeTest.test("missing artifact array is not an empty success", async () => {
-  const f = fixture([json({})]);
-  await NodeAssert.rejects(f.run(), /Invalid artifact listing/);
-  NodeAssert.equal(f.calls.length, 1);
+  const f = fixture([json({}), json(null), json({ artifacts: {} })]);
+  await NodeAssert.rejects(f.run(), /invalid JSON or artifact listing after 3 attempts/);
+  NodeAssert.equal(f.calls.length, 3);
+  NodeAssert.ok(f.calls.every((c) => c.method === "GET"));
 });
 
 NodeTest.test(
@@ -177,4 +178,13 @@ NodeTest.test("no-build run has no branch and no artifacts to remove", async () 
   const f = fixture([json({ artifacts: [] })], { branch: "" });
   await f.run();
   NodeAssert.equal(f.calls.length, 1);
+});
+
+NodeTest.test("malformed listing shape retries before deletion", async () => {
+  const f = fixture([json(null), json({ artifacts: [] }), new Response(null, { status: 204 })]);
+  await f.run();
+  NodeAssert.deepEqual(
+    f.calls.map((c) => c.method),
+    ["GET", "GET", "DELETE"],
+  );
 });
