@@ -27,6 +27,10 @@ export async function cleanup({ runId, branch, token, fetchImpl = fetch, sleep =
         continue;
       }
       if (method === "DELETE" && (response.ok || response.status === 404)) return;
+      if (method === "DELETE" && path.startsWith("git/refs/heads/") && response.status === 422) {
+        const error = await response.json().catch(() => null);
+        if (error?.message === "Reference does not exist") return;
+      }
       if (!response.ok) {
         if (response.status >= 500 && attempt < 2) {
           await sleep(1000 * (attempt + 1));

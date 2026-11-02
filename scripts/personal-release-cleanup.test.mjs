@@ -38,6 +38,18 @@ test("already removed ref and artifact make retries idempotent", async () => {
   await f.run();
 });
 
+test("GitHub's missing-reference 422 succeeds, but unrelated 422 errors fail", async () => {
+  const missing = new Response(JSON.stringify({ message: "Reference does not exist" }), { status: 422 });
+  const f = fixture([json({ artifacts: [{ id: 7 }] }), missing, new Response(null, { status: 204 })]);
+  await f.run();
+  for (const body of [JSON.stringify({ message: "Reference update failed" }), "invalid JSON"]) {
+    const failed = fixture([json({ artifacts: [] }), new Response(body, { status: 422 })]);
+    await assert.rejects(failed.run(), /HTTP 422/);
+  }
+  const artifact = fixture([json({ artifacts: [{ id: 7 }] }), new Response(null, { status: 204 }), new Response(JSON.stringify({ message: "Reference does not exist" }), { status: 422 })]);
+  await assert.rejects(artifact.run(), /HTTP 422/);
+});
+
 test("truncated listing retries before any destructive request", async () => {
   const f = fixture([new Response("{"), json({ artifacts: [] }), new Response(null, { status: 204 })]);
   await f.run();
