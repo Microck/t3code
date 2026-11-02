@@ -4,14 +4,14 @@ on:
   pull_request:
     paths:
       - scripts/personal-release-cleanup.mjs
-      - scripts/personal-release-cleanup.test.mjs
+      - scripts/personal-release-cleanup.node-test.mjs
       - .github/workflows/personal-release.yml
       - .github/workflows/personal-cleanup-check.yml
   push:
     branches: [personal-updates]
     paths:
       - scripts/personal-release-cleanup.mjs
-      - scripts/personal-release-cleanup.test.mjs
+      - scripts/personal-release-cleanup.node-test.mjs
       - .github/workflows/personal-release.yml
       - .github/workflows/personal-cleanup-check.yml
 
@@ -31,10 +31,10 @@ jobs:
           git init .
           git remote add origin https://github.com/Microck/t3code.git
           git fetch --no-tags --depth=1 origin "$SOURCE"
-          git sparse-checkout set --no-cone '/scripts/personal-release-cleanup.mjs' '/scripts/personal-release-cleanup.test.mjs'
+          git sparse-checkout set --no-cone '/scripts/personal-release-cleanup.mjs' '/scripts/personal-release-cleanup.node-test.mjs'
           git -c checkout.workers=0 checkout --detach FETCH_HEAD
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
       - run: node --check scripts/personal-release-cleanup.mjs
-      - run: node --test scripts/personal-release-cleanup.test.mjs
+      - run: node --test scripts/personal-release-cleanup.node-test.mjs
