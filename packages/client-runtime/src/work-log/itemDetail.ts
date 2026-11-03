@@ -1,5 +1,5 @@
 import type { AssetResource, OrchestrationV2TurnItem } from "@t3tools/contracts";
-import { readToolOutputImage, toolOutputImages } from "@t3tools/shared/toolOutput";
+import { toolOutputImageBlocks, toolOutputImages } from "@t3tools/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -50,6 +50,18 @@ const OmpWaitJob = Schema.Struct({
   status: Schema.Literals(["running", "completed", "failed", "cancelled"]),
   label: Schema.String,
   durationMs: Schema.Number,
+  stage: Schema.optionalKey(Schema.String),
+  requests: Schema.optionalKey(Schema.Finite),
+  cost: Schema.optionalKey(Schema.Finite),
+  contextTokens: Schema.optionalKey(Schema.Finite),
+  contextWindow: Schema.optionalKey(Schema.Finite),
+  widget: Schema.optionalKey(
+    Schema.Struct({
+      title: Schema.String,
+      stage: Schema.optionalKey(Schema.String),
+      updatedAt: Schema.Finite,
+    }),
+  ),
   resolvedModel: Schema.optionalKey(Schema.String),
   resolvedModelIdentity: Schema.optionalKey(Schema.String),
   resolvedThinkingLevel: Schema.optionalKey(Schema.String),
@@ -86,6 +98,27 @@ const compactCount = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
 });
 
+export function ompJobMetrics(job: OmpWaitJob): string {
+  return [
+    ...(job.requests === undefined ? [] : [`${job.requests} requests`]),
+    ...(job.contextTokens === undefined
+      ? []
+      : [
+          `context ${compactCount.format(job.contextTokens)}${job.contextWindow === undefined ? "" : ` / ${compactCount.format(job.contextWindow)}`}`,
+        ]),
+    ...(job.cost === undefined ? [] : [`$${job.cost.toFixed(4)}`]),
+  ].join(" · ");
+}
+
+export function ompTaskOutputText(progress: OmpTaskProgress): string | null {
+  if (progress.text !== null) return progress.text;
+  const running =
+    progress.kind === "jobs"
+      ? progress.jobs.some((job) => job.status === "running")
+      : progress.agents.some((agent) => agent.status === "running" || agent.status === "pending");
+  return running ? "Waiting for task result." : null;
+}
+
 export function ompAgentMetrics(agent: OmpAgentProgress): string {
   return [
     `${agent.toolCount} tools`,
@@ -119,18 +152,22 @@ function isSummarizedValue(value: unknown): boolean {
   return isRecord(value) && value.truncated === true && typeof value.summary === "string";
 }
 
-function textFromBlocks(value: unknown, depth: number): string | null {
+function textFromBlocks(
+  value: unknown,
+  depth: number,
+  imageBlocks: ReadonlyArray<unknown>,
+): string | null {
   if (depth > MAX_TEXT_BLOCK_DEPTH) return null;
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
-    const parts = value.map((block) => textFromBlocks(block, depth + 1));
+    const parts = value.map((block) => textFromBlocks(block, depth + 1, imageBlocks));
     return parts.every((part) => part !== null)
       ? parts.filter((part) => part !== "").join("\n")
       : null;
   }
   if (!isRecord(value)) return null;
   if (value.type === "text" && typeof value.text === "string") return value.text;
-  if (value.type === "image") return readToolOutputImage(value) ? "" : "[image]";
+  if (value.type === "image") return imageBlocks.includes(value) ? "" : "[image]";
   if (value.type === "resource_link" && typeof value.uri === "string") return value.uri;
   if (value.type === "resource" && isRecord(value.resource)) {
     const resource = value.resource;
@@ -138,9 +175,10 @@ function textFromBlocks(value: unknown, depth: number): string | null {
     if (typeof resource.uri === "string") return resource.uri;
   }
   const keys = Object.keys(value).filter((key) => key !== "isError" && key !== "is_error");
-  if (keys.length === 1 && keys[0] === "content") return textFromBlocks(value.content, depth + 1);
+  if (keys.length === 1 && keys[0] === "content")
+    return textFromBlocks(value.content, depth + 1, imageBlocks);
   if (keys.length === 2 && keys.includes("content") && keys.includes("structuredContent")) {
-    const text = textFromBlocks(value.content, depth + 1);
+    const text = textFromBlocks(value.content, depth + 1, imageBlocks);
     return text?.trim() ? text : null;
   }
   return null;
@@ -168,7 +206,7 @@ function prettyJsonText(text: string): string {
 function formatToolValue(value: unknown, hasImagePreview = false): string | null {
   if (value === undefined || value === null) return null;
   if (hasImagePreview && isRecord(value) && value.type === "image") return null;
-  const text = textFromBlocks(value, 0);
+  const text = textFromBlocks(value, 0, toolOutputImageBlocks(value));
   if (text !== null) return text.trim() ? prettyJsonText(text) : null;
   let json: string | undefined;
   try {

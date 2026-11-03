@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import { readOmpTaskProgress, ompAgentMetrics, ompAgentStatus } from "./itemDetail.ts";
+import {
+  readOmpTaskProgress,
+  ompAgentMetrics,
+  ompAgentStatus,
+  ompJobMetrics,
+  ompTaskOutputText,
+} from "./itemDetail.ts";
 
 const progress = {
   index: 0,
@@ -115,8 +121,43 @@ describe("OMP wait jobs", () => {
     expect(wait).toEqual({ kind: "jobs", jobs: [job], text: "Waiting for miners" });
     if (wait?.kind !== "jobs") throw new Error("Expected native wait jobs");
     expect(ompAgentStatus(wait.jobs[0]!)).toBe("running");
+    expect(ompJobMetrics(wait.jobs[0]!)).toBe("");
+    expect(ompTaskOutputText({ ...wait, text: null })).toBe("Waiting for task result.");
+    expect(ompTaskOutputText(wait)).toBe("Waiting for miners");
     expect(wait.jobs[0]).not.toHaveProperty("tokens");
     expect(wait.jobs[0]).not.toHaveProperty("toolCount");
+  });
+  it("retains native job activity and widget context", () => {
+    const activity = {
+      ...job,
+      stage: "Checking follower layouts",
+      requests: 12,
+      cost: 0.42,
+      contextTokens: 24000,
+      contextWindow: 200000,
+      widget: {
+        title: "Align content edges across both apps",
+        stage: "Reviewing dashboard spacing",
+        updatedAt: 1000,
+        blocks: [],
+        state: "running",
+      },
+    };
+    const wait = readOmpTaskProgress({ details: { op: "wait", jobs: [activity] } });
+    if (wait?.kind !== "jobs") throw new Error("Expected native wait snapshot");
+    expect(ompJobMetrics(wait.jobs[0]!)).toBe("12 requests · context 24K / 200K · $0.4200");
+    expect(wait.jobs[0]).toMatchObject({
+      stage: activity.stage,
+      requests: 12,
+      cost: 0.42,
+      contextTokens: 24000,
+      contextWindow: 200000,
+      widget: {
+        title: activity.widget.title,
+        stage: activity.widget.stage,
+        updatedAt: 1000,
+      },
+    });
   });
   it("preserves mixed jobs, terminal outcomes, results and reported estimates", () => {
     const jobs = [
