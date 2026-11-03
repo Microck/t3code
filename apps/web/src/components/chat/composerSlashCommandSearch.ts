@@ -12,10 +12,7 @@ type SlashSearchItem = Extract<
   { type: "slash-command" | "provider-slash-command" | "skill" }
 >;
 
-/**
- * Ordinary provider commands must open the message. Advertised `skill:`
- * commands can also be embedded in a prompt, like native skill mentions.
- */
+/** Ordinary provider commands, `/side` and `/btw` must open the message; advertised skills can appear inline. */
 export function slashCommandItemsForPromptPosition(
   items: ReadonlyArray<SlashSearchItem>,
   isAtPromptStart: boolean,
@@ -24,7 +21,10 @@ export function slashCommandItemsForPromptPosition(
     return [...items];
   }
   return items.filter(
-    (item) => item.type !== "provider-slash-command" || item.command.name.startsWith("skill:"),
+    (item) =>
+      item.type === "skill" ||
+      (item.type === "slash-command" && item.command !== "side" && item.command !== "btw") ||
+      (item.type === "provider-slash-command" && item.command.name.startsWith("skill:")),
   );
 }
 
