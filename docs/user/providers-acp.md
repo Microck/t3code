@@ -107,11 +107,14 @@ completion probes currently run only in its interactive CLI, so ACP tasks usuall
 have no estimate. T3 does not start probes or make extra model requests. Context
 token counts remain separate from task completion.
 
-Expand an OMP wait tool to see its reported background jobs as status rows,
-including model identity and elapsed time. Task, shell and evaluation jobs stay
-visible together. Expand a job for its model, result or error. Wait summaries do
-not include task token counts or tool history; those remain in the original task
-tool's detailed progress.
+OMP task jobs reported by a wait update appear in the normal subagent view on web,
+desktop and mobile. Open a task for its available summary and result. Reported stages
+and completion estimates update its activity; finished, failed and cancelled tasks
+settle independently. Full tool history is available only when OMP sends it.
+
+Wait calls containing shell or evaluation jobs keep their ordinary tool output as well.
+Task token counts and tool history remain in the original task tool's detailed progress;
+wait snapshots do not include them.
 
 ## Questions
 
