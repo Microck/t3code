@@ -253,7 +253,11 @@ const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(function* (
   const adapterOptions = {
     selfInvocation: yield* resolveSelfInvocation(),
     instanceId,
-    settings: yield* decodeAcpRegistryAdapterSettings({ agentId }),
+    settings: yield* decodeAcpRegistryAdapterSettings(
+      agentId === "omp"
+        ? { source: "local", commandPath: "omp", commandArgs: ["acp"] }
+        : { agentId },
+    ),
     environment: {},
     ...(continuationEnabled ? { continuationRequests } : {}),
     makeRuntime: (runtimeInput: Parameters<typeof replayRuntime>[0]) => {
@@ -612,6 +616,127 @@ const nextBusyRetry = (session: Effect.Success<ReturnType<typeof openBusyReplayS
   );
 
 describe("AcpRegistryAdapterV2", () => {
+  it.effect.each([
+    { mixed: false, late: false },
+    { mixed: true, late: false },
+    { mixed: false, late: true },
+    { mixed: true, late: true },
+  ])(
+    "projects every OMP wait job through native lineage (mixed=$mixed, late=$late)",
+    ({ mixed, late }) =>
+      Effect.gen(function* () {
+        const gate = makeProviderReplayGate(late ? ["late-results"] : []);
+        const jobs = ["Report", "Validate", "Research"].map((id, index) => ({
+          id,
+          type: "task",
+          status: "running",
+          label: id,
+          durationMs: 1000,
+          completionPercent: index * 25,
+          stage: "Reviewing sources",
+          resolvedModelIdentity: "anthropic/claude-opus-5-5",
+        }));
+        const wait = (jobs: ReadonlyArray<unknown>) =>
+          claudeFrames.update(CLAUDE_ROOT_SESSION, {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "omp-wait",
+            name: "wait",
+            title: "Waiting for research agents",
+            kind: "other",
+            status: "in_progress",
+            rawOutput: {
+              details: {
+                op: "wait",
+                jobs: mixed
+                  ? [
+                      ...jobs,
+                      {
+                        id: "Shell",
+                        type: "bash",
+                        status: "running",
+                        label: "Shell",
+                        durationMs: 1000,
+                      },
+                    ]
+                  : jobs,
+              },
+            },
+          });
+        const session = yield* openClaudeReplaySession(
+          [
+            ...claudeFrames.open,
+            ...claudeFrames.prompt(1),
+            wait(jobs),
+            wait(jobs),
+            ...(late ? [claudeFrames.idle("end_turn")] : []),
+            {
+              ...wait(
+                jobs.map((job, index) => ({
+                  ...job,
+                  status: ["completed", "failed", "cancelled"][index],
+                  resultText: index === 0 ? "Report ready" : undefined,
+                  errorText: index === 1 ? "Validation failed" : undefined,
+                })),
+              ),
+              ...(late ? { label: "late-results" } : {}),
+            },
+            claudeMarker("OMP results settled"),
+            ...(!late ? [claudeFrames.idle("end_turn")] : []),
+            claudeFrames.closeRequest,
+            claudeFrames.closed,
+          ],
+          gate,
+          false,
+          "omp",
+        );
+        yield* session.runtime.startTurn(session.turnInput(1));
+        const events = yield* session.until((event) => event.type === "turn.terminal");
+        if (late) {
+          gate.release("late-results");
+          events.push(...(yield* session.throughMarker("OMP results settled")));
+        }
+        const updates = events
+          .filter((event) => event.type === "subagent.updated")
+          .map((event) => event.subagent);
+        assert.equal(new Set(updates.map((agent) => agent.id)).size, 3);
+        for (const [index, job] of jobs.entries()) {
+          const matching = updates.filter((agent) => agent.title === job.label);
+          assert.isTrue(
+            matching.some(
+              (agent) =>
+                agent.status === "running" &&
+                agent.progress === `~${index * 25}% · Reviewing sources`,
+            ),
+          );
+          assert.equal(matching.at(-1)?.status, ["completed", "failed", "cancelled"][index]);
+          assert.equal(matching.at(-1)?.model, "anthropic/claude-opus-5-5");
+          assert.isNotNull(matching.at(-1)?.childThreadId);
+          assert.equal(matching.at(-1)?.progress, "");
+        }
+        assert.equal(events.filter((event) => event.type === "app_thread.created").length, 3);
+        assert.equal(updates.filter((agent) => agent.status === "running").length, 3);
+        const waitRows = events.filter(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "dynamic_tool" &&
+            event.turnItem.nativeItemRef?.nativeId?.includes("omp-wait"),
+        );
+        if (mixed) {
+          assert.isTrue(waitRows.length > 0);
+          const last = waitRows.at(-1);
+          if (last?.type === "turn_item.updated") assert.equal(last.turnItem.status, "completed");
+        } else
+          assert.isFalse(
+            events.some(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.type === "dynamic_tool" &&
+                event.turnItem.nativeItemRef?.nativeId?.includes("omp-wait"),
+            ),
+          );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect.each([-32603, -32003])(
     "queues a busy prompt with code %s after the preceding turn completes",
     (errorCode) =>
