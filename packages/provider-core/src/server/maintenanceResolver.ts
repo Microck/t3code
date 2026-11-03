@@ -383,11 +383,12 @@ export function parseHomebrewLatestVersion(
   return version === "latest" ? null : version;
 }
 
-const runProbe = Effect.fn("runProbe")(function* (
+export const runProbe = Effect.fn("runProbe")(function* (
   command: string,
   args: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv,
   okExitCodes: ReadonlyArray<number> = [0],
+  cwd?: string,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const collect = Effect.gen(function* () {
@@ -398,6 +399,7 @@ const runProbe = Effect.fn("runProbe")(function* (
         env,
         extendEnv: true,
         shell: resolved.shell,
+        ...(cwd ? { cwd } : {}),
       }),
     );
     yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
