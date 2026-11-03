@@ -9,7 +9,11 @@ import {
   extractDevinSubagentUpdate,
 } from "./devinAcp.ts";
 import { extractDroidElicitationForm } from "./droidAcp.ts";
-import { extractOmpElicitationForm, isOmpAcpCommand } from "./omp-acp.ts";
+import {
+  extractOmpElicitationForm,
+  extractOmpSubagentUpdates,
+  isOmpAcpCommand,
+} from "./omp-acp.ts";
 import {
   copilotClientCapabilitiesMeta,
   extractCopilotSubagentUpdate,
@@ -230,7 +234,10 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       ? { registerExtensions: registerMistralVibeAcpExtensions }
       : {}),
     ...(isOmpAcpCommand(options.settings)
-      ? { extractElicitationForm: extractOmpElicitationForm }
+      ? {
+          extractElicitationForm: extractOmpElicitationForm,
+          extractSubagentUpdates: extractOmpSubagentUpdates,
+        }
       : {}),
     ...(isClaude
       ? {
