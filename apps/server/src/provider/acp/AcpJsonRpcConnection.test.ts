@@ -1098,7 +1098,7 @@ describe("AcpSessionRuntime", () => {
         expect(configOptions).toEqual(loaded.sessionSetupResult.configOptions);
         expect(configOptions.some((option) => option.id === "model")).toBe(true);
         yield* runtime.setModel("composer-2");
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("fails session startup when session/load returns an error", () =>
