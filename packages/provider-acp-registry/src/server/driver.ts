@@ -478,6 +478,7 @@ export const checkAcpRegistryProviderReadiness = Effect.fn(
 
 export type AcpRegistryDriverEnv =
   | AcpRegistryAdapterV2DriverEnv
+  | Digest.Digest
   | ProviderHost.ProviderHost
   | HttpClient.HttpClient
   | ProviderLatestVersions.ProviderLatestVersions;
