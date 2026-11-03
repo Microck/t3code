@@ -1464,6 +1464,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         ...(options.ownDetachedProcessGroup === undefined
           ? {}
           : { detached: options.ownDetachedProcessGroup }),
+        windowsHide: true,
         shell: containedSpawnCommand.shell,
       }),
     )
