@@ -36,6 +36,8 @@ import {
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 
+import { isOmpAcpCommand } from "./omp-acp.ts";
+
 const MAX_AUTH_METHODS = 32;
 const MAX_MODELS = 256;
 const MAX_ID_LENGTH = 128;
@@ -422,7 +424,31 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       yield* Deferred.await(commandsAdvertised).pipe(
         Effect.timeoutOption(COMMAND_ADVERTISEMENT_GRACE),
       );
-      return { resolved, started, commands: yield* Ref.get(commandsRef) };
+      const probe = acpRegistryProbeResult(
+        input.instanceId,
+        started,
+        resolved.agent?.icon ?? null,
+        {
+          command: resolved.spawn.command,
+          args: resolved.spawn.args,
+        },
+      );
+      // OMP advertises thinking levels for its selected model only. Its ACP model setter
+      // is session-local, so discover each model in this disposable session, never a live run.
+      const models = isOmpAcpCommand(input.settings)
+        ? yield* Effect.forEach(probe.models, (model) =>
+            runtime.setConfigOption(started.modelConfigId ?? "model", model.id).pipe(
+              Effect.map((response) => ({
+                ...model,
+                optionDescriptors: acpProviderOptionDescriptors({
+                  configOptions: response.configOptions,
+                  modeState: parseSessionModeState(started.sessionSetupResult),
+                }),
+              })),
+            ),
+          )
+        : probe.models;
+      return { probe: { ...probe, models }, commands: yield* Ref.get(commandsRef) };
     }).pipe(
       Effect.scoped,
       Effect.timeoutOrElse({
@@ -440,15 +466,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       ),
     );
     return {
-      probe: acpRegistryProbeResult(
-        input.instanceId,
-        result.started,
-        result.resolved.agent?.icon ?? null,
-        {
-          command: result.resolved.spawn.command,
-          args: result.resolved.spawn.args,
-        },
-      ),
+      probe: result.probe,
       slashCommands: result.commands.slashCommands,
       skills: result.commands.skills,
     };
