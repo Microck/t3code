@@ -105,6 +105,10 @@ const fixes: ReadonlyArray<{
     label: "Wait for acknowledged ACP session loads before publishing their model catalog",
   },
   {
+    commit: "8e52943581fe194dc2ada05636d96e8b1da0d639",
+    label: "Provide secure random to ACP load replay regression tests",
+  },
+  {
     commit: "60ae78109e5f5eac13702dc98f625e020dc26561",
     label: "Show native OMP activity and metrics while waiting for task results",
   },
