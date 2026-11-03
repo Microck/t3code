@@ -116,6 +116,10 @@ const fixes: ReadonlyArray<{
     commit: "f089fd04434f538cbdfb92e2c78c36d8525db344",
     label: "Show OMP task jobs in native subagent views with reported progress",
   },
+  {
+    commit: "73d1ec7efeedb5f8c4ba56f324a5f94a644c1bca",
+    label: "Preserve the ACP Registry digest service requirement",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
