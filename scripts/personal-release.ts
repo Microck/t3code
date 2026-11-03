@@ -120,6 +120,10 @@ const fixes: ReadonlyArray<{
     commit: "73d1ec7efeedb5f8c4ba56f324a5f94a644c1bca",
     label: "Preserve the ACP Registry digest service requirement",
   },
+  {
+    commit: "e68f17673e2b818749e07c9a53e8faa811e4d76e",
+    label: "Discover and preserve OMP thinking tiers for each model and account",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
