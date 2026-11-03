@@ -265,6 +265,9 @@ export const AcpRegistryProbeModel = Schema.Struct({
   id: AcpRegistryProbeText,
   name: AcpRegistryProbeText,
   description: AcpRegistryProbeDescription,
+  optionDescriptors: Schema.optional(
+    Schema.Array(ProviderOptionDescriptor).check(Schema.isMaxLength(16)),
+  ),
 });
 export type AcpRegistryProbeModel = typeof AcpRegistryProbeModel.Type;
 
