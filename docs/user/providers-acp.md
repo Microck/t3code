@@ -39,6 +39,10 @@ credentials and skills remain managed by the installed agent or its wrapper. Mod
 options come from ACP, including model IDs that contain JSON. T3 Code launches the executable directly
 without expanding shell expressions.
 
+ACP session configuration belongs to the current model. Updates for one model must not replace
+the known thinking levels or other options of another model. OMP discovery reads each model's
+options in a disposable session without sending prompts or changing the saved default model.
+
 ## Where agents run
 
 Registry agents always run on the machine that hosts your T3 Code server. That stays true when you
