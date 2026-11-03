@@ -101,8 +101,10 @@ function modelsFromDiscovery(
     | Pick<AcpRegistryLiveConfiguration, "models" | "currentModelId" | "configOptions">
     | undefined,
   customModels: ReadonlyArray<string>,
+  previousModels: ReadonlyArray<ServerProviderModel> = [],
 ): ReadonlyArray<ServerProviderModel> {
   const discovered = discovery?.models ?? [];
+  const previousById = new Map(previousModels.map((model) => [model.slug, model]));
   const capabilities =
     discovery === undefined || discovery.configOptions.length === 0
       ? EMPTY_CAPABILITIES
@@ -123,9 +125,15 @@ function modelsFromDiscovery(
           name: model.name,
           isCustom: false,
           ...(model.id === discovery?.currentModelId ? { isDefault: true } : {}),
-          capabilities,
+          // ACP config options describe one session's selected model, not its whole catalog.
+          capabilities:
+            model.optionDescriptors !== undefined
+              ? createModelCapabilities({ optionDescriptors: model.optionDescriptors })
+              : model.id === discovery?.currentModelId
+                ? capabilities
+                : (previousById.get(model.id)?.capabilities ?? EMPTY_CAPABILITIES),
         }));
-  return providerModelsFromSettings(builtInModels, customModels, capabilities);
+  return providerModelsFromSettings(builtInModels, customModels, EMPTY_CAPABILITIES);
 }
 
 function acpRegistrySnapshotReadiness(
@@ -291,7 +299,7 @@ export function applyAcpRegistryLiveConfiguration(
     models:
       configuration.models.length === 0 && configuration.configOptions.length === 0
         ? provider.models
-        : modelsFromDiscovery(discovery, customModels),
+        : modelsFromDiscovery(discovery, customModels, provider.models),
   };
 }
 
