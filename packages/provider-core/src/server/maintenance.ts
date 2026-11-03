@@ -26,4 +26,5 @@ export interface ProviderMaintenanceCommandAction {
   readonly lockKey: string;
   /** The provider's environment, including its PATH and custom home. */
   readonly env?: NodeJS.ProcessEnv;
+  readonly cwd?: string;
 }
