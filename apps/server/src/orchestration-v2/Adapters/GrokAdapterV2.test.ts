@@ -39,6 +39,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as RuntimePolicy from "../RuntimePolicy.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import { acpPermissionDisposition } from "@t3tools/provider-acp/server/clientPolicy";
 import { acpCompletedTurnShouldTerminalizeTool } from "@t3tools/provider-acp/server/adapter";
 import {
@@ -162,23 +163,6 @@ describe("GrokAdapterV2 capabilities", () => {
     assert.isTrue(acpCompletedTurnShouldTerminalizeTool(foreground, flavor));
     assert.isFalse(acpCompletedTurnShouldTerminalizeTool(monitor, flavor));
     assert.isFalse(acpCompletedTurnShouldTerminalizeTool(subagent, flavor));
-    const waiting = { ...foreground, status: "requiresAction" as const };
-    assert.isFalse(acpCompletedTurnShouldTerminalizeTool(waiting, flavor));
-    assert.isTrue(acpCompletedTurnShouldTerminalizeTool(waiting, flavor, "failed"));
-    assert.isFalse(
-      acpCompletedTurnShouldTerminalizeTool(
-        { ...monitor, status: "requiresAction" },
-        flavor,
-        "failed",
-      ),
-    );
-    assert.isFalse(
-      acpCompletedTurnShouldTerminalizeTool(
-        { ...subagent, status: "requiresAction" },
-        flavor,
-        "failed",
-      ),
-    );
   });
 });
 
@@ -353,6 +337,7 @@ describe("Grok launch permission mode", () => {
       }).pipe(
         Effect.provide(
           RuntimePolicy.layerFromProjectStore.pipe(
+            Layer.provide(ServerSettings.layerTest()),
             Layer.provide(
               Layer.mock(ProjectStore.ProjectStoreV2)({
                 get: () => Effect.die("the thread has a worktree"),

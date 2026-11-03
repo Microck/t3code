@@ -1,11 +1,13 @@
-import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import * as Deferred from "effect/Deferred";
-import * as Fiber from "effect/Fiber";
-import * as EffectAcpErrors from "effect-acp/errors";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Sink from "effect/Sink";
+import * as TestClock from "effect/testing/TestClock";
 import * as Result from "effect/Result";
+import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
@@ -23,61 +25,7 @@ const withTerminals = <A, E>(use: (terminals: AcpClientTerminals) => Effect.Effe
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
 
 describe("AcpClientTerminals", () => {
-  it.live("drains an admitted spawn and rejects stale creates when Stop disposes terminals", () =>
-    Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const started = yield* Deferred.make<void>();
-      const releaseSpawn = yield* Deferred.make<void>();
-      const children: Array<ReturnType<typeof ChildProcessSpawner.makeHandle>> = [];
-      let stopped = false;
-      const delayedSpawner = ChildProcessSpawner.make((command) =>
-        spawner.spawn(command).pipe(
-          Effect.tap((handle) =>
-            Effect.sync(() => {
-              children.push(handle);
-            }),
-          ),
-          Effect.tap(() => Deferred.succeed(started, undefined)),
-          Effect.tap(() => Deferred.await(releaseSpawn)),
-        ),
-      );
-      const terminals = yield* makeAcpClientTerminals({ defaultCwd: process.cwd() }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, delayedSpawner),
-      );
-      yield* Effect.addFinalizer(() =>
-        Deferred.succeed(releaseSpawn, undefined).pipe(Effect.andThen(terminals.disposeAll)),
-      );
-      const admission = Effect.suspend(() =>
-        stopped
-          ? Effect.fail(EffectAcpErrors.AcpRequestError.internalError("stopped generation"))
-          : Effect.void,
-      );
-      const request = {
-        sessionId: "session",
-        command: process.execPath,
-        args: ["-e", "setInterval(() => {}, 1000)"],
-      };
-      const creating = yield* terminals.create(request, admission).pipe(Effect.forkChild);
-      yield* Deferred.await(started);
-      expect(yield* children[0]!.isRunning).toBe(true);
-      stopped = true;
-      const disposing = yield* terminals.disposeAll.pipe(Effect.forkChild);
-      const stale = yield* terminals
-        .create(request, admission)
-        .pipe(Effect.result, Effect.forkChild);
-      expect(disposing.pollUnsafe()).toBeUndefined();
-      yield* Deferred.succeed(releaseSpawn, undefined);
-      yield* Fiber.join(creating);
-      yield* Fiber.join(disposing);
-      const rejected = yield* Fiber.join(stale);
-      expect(Result.isFailure(rejected)).toBe(true);
-      expect(children).toHaveLength(1);
-      yield* Effect.ignore(children[0]!.exitCode);
-      expect(yield* children[0]!.isRunning).toBe(false);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-  );
-
-  it.effect("runs a command, buffers output, and reports the exit status", () =>
+  it.live("runs a command, buffers output, and reports the exit status", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {
         const created = yield* terminals.create({
@@ -103,7 +51,7 @@ describe("AcpClientTerminals", () => {
     ),
   );
 
-  it.effect("resolves terminal environment from the requesting ACP session", () =>
+  it.live("resolves terminal environment from the requesting ACP session", () =>
     Effect.gen(function* () {
       const terminals = yield* makeAcpClientTerminals({
         defaultCwd: process.cwd(),
@@ -129,7 +77,7 @@ describe("AcpClientTerminals", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
-  it.effect("runs Devin shell source with arguments, pipes, and session fallback variables", () =>
+  it.live("runs Devin shell source with arguments, pipes, and session fallback variables", () =>
     Effect.gen(function* () {
       const terminals = yield* makeAcpClientTerminals({
         defaultCwd: process.cwd(),
@@ -148,7 +96,7 @@ describe("AcpClientTerminals", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
-  it.effect("truncates buffered output from the beginning at the byte limit", () =>
+  it.live("truncates buffered output from the beginning at the byte limit", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {
         const created = yield* terminals.create({
@@ -170,7 +118,7 @@ describe("AcpClientTerminals", () => {
     ),
   );
 
-  it.effect("kills long-running commands and rejects released terminal handles", () =>
+  it.live("kills long-running commands and rejects released terminal handles", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {
         const created = yield* terminals.create({
@@ -202,7 +150,122 @@ describe("AcpClientTerminals", () => {
     ),
   );
 
-  it.effect("reserves terminal capacity across concurrent creates", () =>
+  it.effect.each([
+    { deadline: "default", forceKillAfter: undefined, deadlineMillis: 5000 },
+    { deadline: "configured", forceKillAfter: "250 millis" as const, deadlineMillis: 250 },
+  ])(
+    "waits for the $deadline deadline before force-killing a SIGTERM-ignoring terminal",
+    ({ forceKillAfter, deadlineMillis }) =>
+      Effect.gen(function* () {
+        const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+        const child = ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Deferred.await(exited),
+          isRunning: Deferred.isDone(exited).pipe(Effect.map((done) => !done)),
+          // Model a process that only exits when the spawner escalates after its deadline.
+          kill: (options) =>
+            options?.forceKillAfter === undefined
+              ? Deferred.await(exited).pipe(Effect.asVoid)
+              : Effect.sleep(options.forceKillAfter).pipe(
+                  Effect.andThen(Deferred.succeed(exited, ChildProcessSpawner.ExitCode(137))),
+                  Effect.asVoid,
+                ),
+          stdin: Sink.drain,
+          stdout: Stream.empty,
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void),
+        });
+        const terminals = yield* makeAcpClientTerminals({
+          defaultCwd: process.cwd(),
+          ...(forceKillAfter === undefined ? {} : { forceKillAfter }),
+        }).pipe(
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => Effect.succeed(child)),
+          ),
+        );
+        yield* Effect.addFinalizer(() =>
+          Deferred.succeed(exited, ChildProcessSpawner.ExitCode(137)).pipe(
+            Effect.andThen(terminals.disposeAll),
+          ),
+        );
+        const terminal = yield* terminals.create({
+          sessionId: "session",
+          command: "ignores-SIGTERM",
+        });
+        const request = { sessionId: "session", ...terminal };
+        const killing = yield* terminals.kill(request).pipe(Effect.forkChild);
+        const waiting = yield* terminals.waitForExit(request).pipe(Effect.forkChild);
+
+        yield* TestClock.adjust(deadlineMillis - 1);
+        expect(yield* child.isRunning).toBe(true);
+        expect(killing.pollUnsafe()).toBeUndefined();
+        expect(waiting.pollUnsafe()).toBeUndefined();
+        yield* TestClock.adjust("1 millis");
+        expect(yield* child.isRunning).toBe(false);
+        yield* Fiber.join(killing);
+        expect(yield* Fiber.join(waiting)).toEqual({ exitCode: 137, signal: null });
+      }).pipe(Effect.scoped),
+  );
+
+  it.live("force-kills commands that ignore SIGTERM and resolves wait_for_exit", () =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const ready = yield* Deferred.make<void>();
+      const spawned = yield* Deferred.make<ChildProcessSpawner.ChildProcessHandle>();
+      let stdout = "";
+      const terminals = yield* makeAcpClientTerminals({
+        defaultCwd: process.cwd(),
+        forceKillAfter: "50 millis",
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, {
+          ...spawner,
+          spawn: (command) =>
+            spawner.spawn(command).pipe(
+              Effect.tap((child) => Deferred.succeed(spawned, child)),
+              Effect.map((child) => ({
+                ...child,
+                stdout: child.stdout.pipe(
+                  Stream.tap((chunk) => {
+                    stdout += Buffer.from(chunk).toString("utf8");
+                    return stdout.includes("ready")
+                      ? Deferred.succeed(ready, undefined)
+                      : Effect.void;
+                  }),
+                ),
+              })),
+            ),
+        }),
+      );
+      yield* Effect.addFinalizer(() => terminals.disposeAll);
+      const terminal = yield* terminals.create({
+        sessionId: "session",
+        command: process.execPath,
+        args: [
+          "-e",
+          "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000);",
+        ],
+      });
+      const child = yield* Deferred.await(spawned);
+      // Reap only this test's captured child, including when the regression fails.
+      yield* Effect.addFinalizer(() => child.kill({ killSignal: "SIGKILL" }).pipe(Effect.ignore));
+      yield* Deferred.await(ready);
+
+      const request = { sessionId: "session", ...terminal };
+      yield* terminals.kill(request);
+      const exit = yield* terminals.waitForExit(request);
+      // Windows has no signals: the command is terminated without a signal name.
+      if (!(yield* HostProcess.isWindows)) {
+        expect(exit).toEqual({ exitCode: null, signal: "SIGKILL" });
+      }
+      expect(yield* child.isRunning).toBe(false);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live("reserves terminal capacity across concurrent creates", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {
         const results = yield* Effect.all(
@@ -224,7 +287,7 @@ describe("AcpClientTerminals", () => {
     ),
   );
 
-  it.effect("bounds unreleased terminal handles without invalidating existing ids", () =>
+  it.live("bounds unreleased terminal handles without invalidating existing ids", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {
         const terminalIds: string[] = [];
@@ -255,7 +318,7 @@ describe("AcpClientTerminals", () => {
     ),
   );
 
-  it.effect("bounds aggregate output retained across unreleased terminals", () =>
+  it.live("bounds aggregate output retained across unreleased terminals", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {
         const terminalIds: string[] = [];
@@ -286,7 +349,7 @@ describe("AcpClientTerminals", () => {
     ),
   );
 
-  it.effect("rejects terminal handles from a different ACP session", () =>
+  it.live("rejects terminal handles from a different ACP session", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {
         const created = yield* terminals.create({
@@ -298,13 +361,14 @@ describe("AcpClientTerminals", () => {
           sessionId: "foreign-session",
           terminalId: created.terminalId,
         };
-        const results = yield* Effect.all(
+        const results = yield* Effect.forEach(
           [
             terminals.output(foreignRequest),
             terminals.waitForExit(foreignRequest),
             terminals.kill(foreignRequest),
             terminals.release(foreignRequest),
-          ].map((effect) => effect.pipe(Effect.result)),
+          ],
+          (effect) => effect.pipe(Effect.result),
           { concurrency: "unbounded" },
         );
 

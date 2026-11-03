@@ -60,8 +60,7 @@ function appendOutput(state: OutputBufferState, chunk: Uint8Array): void {
 function readOutput(state: OutputBufferState): string {
   let combined: Uint8Array = NodeBuffer.Buffer.concat(state.chunks, state.bytes);
   if (state.truncated) {
-    // Drop leading UTF-8 continuation bytes so truncation lands on a
-    // character boundary, as the spec requires.
+    // The spec requires truncation at a UTF-8 character boundary.
     let start = 0;
     while (start < combined.byteLength && (combined[start]! & 0b1100_0000) === 0b1000_0000) {
       start += 1;
@@ -99,7 +98,6 @@ interface ManagedAcpTerminal {
 export interface AcpClientTerminals {
   readonly create: (
     request: EffectAcpSchema.CreateTerminalRequest,
-    admit?: Effect.Effect<void, EffectAcpErrors.AcpRequestError>,
   ) => Effect.Effect<EffectAcpSchema.CreateTerminalResponse, EffectAcpErrors.AcpRequestError>;
   readonly output: (
     request: EffectAcpSchema.TerminalOutputRequest,
@@ -138,13 +136,13 @@ function acpTerminalCommand(input: {
   readonly shellCommands?: boolean | undefined;
   readonly defaultCwd: string;
   readonly environment?: NodeJS.ProcessEnv | undefined;
-  readonly forceKillAfter?: Duration.Input | undefined;
+  readonly forceKillAfter: Duration.Input;
 }) {
   return ChildProcess.make(input.request.command, input.request.args ?? [], {
     cwd: input.request.cwd ?? input.defaultCwd,
     ...(input.environment === undefined ? {} : { env: input.environment }),
     shell: input.shellCommands === true && (input.request.args?.length ?? 0) === 0,
-    forceKillAfter: input.forceKillAfter ?? "5 seconds",
+    forceKillAfter: input.forceKillAfter,
   });
 }
 
@@ -152,6 +150,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
   options: AcpClientTerminalsOptions,
 ): Effect.fn.Return<AcpClientTerminals, never, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const forceKillAfter = options.forceKillAfter ?? "5 seconds";
   const creationPermit = yield* Semaphore.make(1);
   const terminals = new Map<string, ManagedAcpTerminal>();
   let nextTerminalNumber = 1;
@@ -194,11 +193,10 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
     return Effect.succeed(terminal);
   };
 
-  const create: AcpClientTerminals["create"] = (request, admit = Effect.void) =>
+  const create: AcpClientTerminals["create"] = (request) =>
     creationPermit.withPermit(
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          yield* admit;
           const liveCount = Array.from(terminals.values()).filter(
             (terminal) => !terminal.released && terminal.exitStatus === undefined,
           ).length;
@@ -234,7 +232,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
                   shellCommands: options.shellCommands,
                   defaultCwd: options.defaultCwd,
                   environment,
-                  forceKillAfter: options.forceKillAfter,
+                  forceKillAfter,
                 }),
               )
               .pipe(
@@ -268,7 +266,9 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
               ),
             },
             exit: yield* Deferred.make<EffectAcpSchema.WaitForTerminalExitResponse>(),
-            kill: child.kill().pipe(Effect.ignore),
+            // The spawner only applies the command's forceKillAfter on scope close;
+            // an explicit kill must pass it or a SIGTERM-ignoring command never exits.
+            kill: child.kill({ forceKillAfter }).pipe(Effect.ignore),
             dispose: Scope.close(terminalScope, Exit.void).pipe(Effect.ignore),
             exitStatus: undefined,
             released: false,
@@ -362,20 +362,15 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
     terminals.get(terminalId)?.commandLine;
 
   const disposeAll: AcpClientTerminals["disposeAll"] = Effect.uninterruptible(
-    creationPermit.withPermit(
-      Effect.suspend(() =>
-        Effect.forEach(
-          Array.from(terminals.values()),
-          (terminal) =>
-            Effect.sync(() => {
-              terminal.released = true;
-            }).pipe(
-              Effect.andThen(terminal.dispose),
-              Effect.andThen(Deferred.await(terminal.exit)),
-            ),
-          { concurrency: "unbounded", discard: true },
-        ).pipe(Effect.andThen(Effect.sync(pruneReleasedSnapshots))),
-      ),
+    Effect.suspend(() =>
+      Effect.forEach(
+        Array.from(terminals.values()),
+        (terminal) =>
+          Effect.sync(() => {
+            terminal.released = true;
+          }).pipe(Effect.andThen(terminal.dispose), Effect.andThen(Deferred.await(terminal.exit))),
+        { concurrency: "unbounded", discard: true },
+      ).pipe(Effect.andThen(Effect.sync(pruneReleasedSnapshots))),
     ),
   );
 
@@ -395,10 +390,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
       );
 
   return {
-    create: (request, admit) =>
-      logged("terminal/create", (value: EffectAcpSchema.CreateTerminalRequest) =>
-        create(value, admit),
-      )(request),
+    create: logged("terminal/create", create),
     output: logged("terminal/output", output),
     waitForExit: logged("terminal/wait_for_exit", waitForExit),
     kill: logged("terminal/kill", kill),
