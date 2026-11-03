@@ -79,7 +79,7 @@ const fixes: ReadonlyArray<{
     label: "Keep ACP startup metadata from erasing the model catalog",
   },
   {
-    commit: "901ffa4af0e70d8d9cad08240973ee4253f13905",
+    commit: "4d46442548c8c0779660d0a70a96a75c4fa76f43",
     label: "Check and install OMP provider updates through its native updater",
   },
   {
@@ -93,7 +93,7 @@ const fixes: ReadonlyArray<{
   // Command-label normalization must not hide the Grok regression test checkpoint.
   { commit: "6e276dd3c685a41d096b52da13902dbefbe6dfbb" },
   {
-    commit: "bbf3fcd21d6832c03a616dc5a09b36274ebece0c",
+    commit: "e92c75035cda252c65d75a726626dd6507c54cdd",
     label: "Confirm Stop for every owned ACP runtime and client terminal",
   },
   {
@@ -107,6 +107,10 @@ const fixes: ReadonlyArray<{
   {
     commit: "60ae78109e5f5eac13702dc98f625e020dc26561",
     label: "Show native OMP activity and metrics while waiting for task results",
+  },
+  {
+    commit: "f089fd04434f538cbdfb92e2c78c36d8525db344",
+    label: "Show OMP task jobs in native subagent views with reported progress",
   },
 ];
 
