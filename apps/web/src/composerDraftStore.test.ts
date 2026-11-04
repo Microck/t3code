@@ -1194,6 +1194,50 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
+  it.each([
+    ["project", "manual"],
+    ["context", "manual"],
+    ["project", "auto"],
+    ["context", "auto"],
+  ] as const)(
+    "scopes model picks when %s routing switches environments in %s mode",
+    (route, mode) => {
+      const store = useComposerDraftStore.getState();
+      const selection = modelSelection(CODEX_DRIVER, "gpt-6.1-sol", { reasoningEffort: "high" });
+      store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+      store.setPrompt(draftId, "keep my unsent prompt");
+      store.setModelSelection(draftId, selection, { explicit: true });
+      const changeProject = (destination: typeof projectRef) => {
+        if (route === "project") {
+          store.setLogicalProjectDraftThreadId(
+            scopedProjectKey(destination),
+            destination,
+            draftId,
+            {
+              environmentSelection: mode,
+            },
+          );
+        } else {
+          store.setDraftThreadContext(draftId, {
+            projectRef: destination,
+            environmentSelection: mode,
+          });
+        }
+      };
+      changeProject(scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("another-local-project")));
+      expect(store.getComposerDraft(draftId)?.activeProvider).toBe(CODEX_INSTANCE);
+      changeProject(remoteProjectRef);
+      const moved = store.getComposerDraft(draftId);
+      expect(moved?.prompt).toBe("keep my unsent prompt");
+      expect(moved?.activeProvider).toBe(mode === "auto" ? CODEX_INSTANCE : null);
+      expect(moved?.modelSelectionByProvider).toEqual(
+        mode === "auto" ? { [CODEX_INSTANCE]: selection } : {},
+      );
+      expect(moved?.modelSelectionExplicit).toBe(mode === "auto");
+      expect(store.getDraftSession(draftId)?.environmentId).toBe(OTHER_TEST_ENVIRONMENT_ID);
+    },
+  );
+
   it("clears stale upload metadata when retargeting a draft to another environment", () => {
     const store = useComposerDraftStore.getState();
     const hydratedFile: ComposerFileAttachment = {
