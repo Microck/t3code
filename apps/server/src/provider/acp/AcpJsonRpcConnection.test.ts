@@ -16,6 +16,7 @@ import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
 import { describe, expect } from "vite-plus/test";
 
@@ -1061,7 +1062,45 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
-  // regression: #3156 harden ACP resume with replay-idle load readiness
+  it.effect.each(["startup", "activation"] as const)(
+    "waits for the actual load response after quiet replay during %s",
+    (phase) =>
+      Effect.gen(function* () {
+        const replayed = yield* Deferred.make<void>();
+        const releaseLoad = yield* Deferred.make<void>();
+        const runtime = yield* AcpSessionRuntime.make({
+          ...mockRuntimeOptions,
+          spawn: {
+            ...mockRuntimeOptions.spawn,
+            env: { T3_ACP_HOLD_LOAD_RESPONSE: "1" },
+          },
+          ...(phase === "startup" ? { resumeSessionId: "candidate-session" } : {}),
+        });
+        yield* runtime.handleUnknownExtRequest(() =>
+          Deferred.succeed(replayed, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseLoad)),
+            Effect.as({}),
+          ),
+        );
+        yield* runtime.initialize();
+        if (phase === "activation") yield* runtime.start();
+        const loading = yield* (
+          phase === "startup" ? runtime.start() : runtime.loadSession("candidate-session")
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(replayed);
+        yield* TestClock.adjust("3 seconds");
+        const prematureResult = loading.pollUnsafe();
+        yield* Deferred.succeed(releaseLoad, undefined);
+        const loaded = yield* Fiber.join(loading);
+        assert.isUndefined(prematureResult);
+        expect(loaded.sessionId).toBe("candidate-session");
+        const configOptions = yield* runtime.getConfigOptions;
+        expect(configOptions).toEqual(loaded.sessionSetupResult.configOptions);
+        expect(configOptions.some((option) => option.id === "model")).toBe(true);
+        yield* runtime.setModel("composer-2");
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("fails session startup when session/load returns an error", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
