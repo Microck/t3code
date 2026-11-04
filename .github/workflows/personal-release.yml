@@ -127,6 +127,8 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
       - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
       - run: vp run build:desktop
+      - name: Verify built web client boots
+        run: node apps/web/scripts/verify-built-boot.ts
       - uses: actions/upload-artifact@v7
         with:
           name: js-bundle

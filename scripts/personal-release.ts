@@ -93,7 +93,7 @@ const fixes: ReadonlyArray<{
   // Command-label normalization must not hide the Grok regression test checkpoint.
   { commit: "6e276dd3c685a41d096b52da13902dbefbe6dfbb" },
   {
-    commit: "e92c75035cda252c65d75a726626dd6507c54cdd",
+    commit: "9fdff1d502a7d1158355b8df91f23c686590c7c1",
     label: "Confirm Stop for every owned ACP runtime and client terminal",
   },
   {
@@ -101,7 +101,7 @@ const fixes: ReadonlyArray<{
     label: "Fail waiting foreground tools when native ACP work ends with an error",
   },
   {
-    commit: "3dd23cf4720aca0fe56b999f4750be728e23b57c",
+    commit: "225b7a3fcb0ce75f96626f4b874f03d60021f71e",
     label: "Wait for acknowledged ACP session loads before publishing their model catalog",
   },
   {
