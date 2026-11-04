@@ -10,6 +10,9 @@ show and ignore the selection. Everything else is stored on a server. Choose one
 edit its settings, or leave **All environments** to edit every connected environment at once.
 Offline environments keep their current values; this is a bulk edit, not a synced global default.
 
+Manually moving an unsent draft to another machine uses that destination's project or environment
+default model. Automatic load balancing keeps the model you selected for the draft.
+
 Choose a project to override settings for it on the selected environments. A layers icon beside
 each server row's title shows where the value comes from: the built-in default, the environment,
 or a project override. Click it to see that chain on every selected environment. An override can
