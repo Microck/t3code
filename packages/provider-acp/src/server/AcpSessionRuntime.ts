@@ -44,10 +44,7 @@ import {
   toolCallProgressLength,
   parseSessionModeState,
   parseSessionUpdateEvent,
-  sessionUpdateCountsAsLoadReplayActivity,
   sessionUpdateIsReplay,
-  waitForSessionLoadReplayIdle,
-  type SessionLoadGate,
   type AcpParsedSessionEvent,
   type AcpSessionModeState,
   type AcpToolCallState,
@@ -79,7 +76,6 @@ export type AcpSessionRuntimeEvent =
     };
 
 const defaultSessionLoadTimeout = Duration.seconds(90);
-const defaultSessionLoadReplayIdleGap = Duration.seconds(2);
 const defaultCancelTimeout = Duration.seconds(15);
 const maxStartupMetadataUpdates = 32;
 // Antigravity can emit an accepted 16 KiB Google authorization URL on stderr.
@@ -100,7 +96,6 @@ export interface AcpSessionRuntimeOptions {
   readonly resumeSessionId?: string;
   readonly resumeMethod?: "load" | "resume";
   readonly sessionLoadTimeout?: Duration.Input;
-  readonly sessionLoadReplayIdleGap?: Duration.Input;
   readonly interruptPromptOnCancel?: boolean;
   readonly cancelMeta?: EffectAcpSchema.CancelNotification["_meta"];
   readonly initializeMeta?: EffectAcpSchema.InitializeRequest["_meta"];
@@ -1292,7 +1287,12 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
   const promptDispatchSemaphore = yield* Semaphore.make(1);
   const activePromptRef = yield* Ref.make<Option.Option<AcpActivePrompt>>(Option.none());
   const assistantUpdatesOpenRef = yield* Ref.make(true);
-  const sessionLoadGateRef = yield* Ref.make<Option.Option<SessionLoadGate>>(Option.none());
+  const sessionLoadGateRef = yield* Ref.make<
+    Option.Option<{
+      readonly sessionId: string;
+      readonly candidateConfigOptions?: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+    }>
+  >(Option.none());
 
   const ensureConnected = Effect.gen(function* () {
     const error = yield* Ref.get(terminationErrorRef);
@@ -1730,22 +1730,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         // A different session can still have an in-flight prompt while this
         // load replays history, so quarantine only the loading session.
         const loadingThisSession =
-          Option.isSome(gate) &&
-          gate.value.active &&
-          notification.sessionId === gate.value.sessionId;
-        if (
-          loadingThisSession &&
-          sessionUpdateCountsAsLoadReplayActivity(notification, gate.value.sessionId)
-        ) {
-          const lastActivityAtMillis = yield* Clock.currentTimeMillis;
-          yield* Ref.set(
-            sessionLoadGateRef,
-            Option.some({
-              ...gate.value,
-              lastActivityAtMillis,
-            }),
-          );
-        }
+          Option.isSome(gate) && notification.sessionId === gate.value.sessionId;
         if (sessionUpdateIsReplay(notification)) {
           return;
         }
@@ -1916,42 +1901,13 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       | EffectAcpSchema.ResumeSessionResponse,
   ): Effect.fn.Return<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError> {
     const current = yield* getStartedState;
-    const meta = sessionSetupResult._meta;
-    const syntheticReplayIdle =
-      meta !== null &&
-      typeof meta === "object" &&
-      !Array.isArray(meta) &&
-      (meta as { readonly t3SessionLoadReady?: unknown }).t3SessionLoadReady === "replay_idle";
-    const extractedModelConfigId = extractModelConfigId(sessionSetupResult);
-    const nextModelConfigId =
-      extractedModelConfigId ?? (syntheticReplayIdle ? current.modelConfigId : undefined);
-    const nextModeState = parseSessionModeState(sessionSetupResult);
-    if (nextModeState !== undefined) {
-      yield* Ref.set(modeStateRef, nextModeState);
-    } else if (!syntheticReplayIdle) {
-      yield* Ref.set(modeStateRef, undefined);
-    }
-    // Synthetic replay-idle load responses only carry initialize model/mode
-    // meta; preserve live configOptions so setConfigOption still validates.
-    if (
-      sessionSetupResult.configOptions !== undefined &&
-      sessionSetupResult.configOptions !== null
-    ) {
-      yield* SubscriptionRef.set(
-        configOptionsRef,
-        sessionConfigOptionsFromSetup(sessionSetupResult),
-      );
-    } else if (!syntheticReplayIdle) {
-      yield* SubscriptionRef.set(
-        configOptionsRef,
-        sessionConfigOptionsFromSetup(sessionSetupResult),
-      );
-    }
+    yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
+    yield* SubscriptionRef.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
     const nextState = {
       sessionId,
       initializeResult: current.initializeResult,
       sessionSetupResult,
-      modelConfigId: nextModelConfigId,
+      modelConfigId: extractModelConfigId(sessionSetupResult),
     } satisfies AcpStartedState;
     yield* Ref.set(toolCallsRef, new Map());
     yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
@@ -1959,29 +1915,15 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     return nextState;
   });
 
-  const runLoadSessionWithReplayIdle = (
+  const runLoadSession = (
     loadPayload: EffectAcpSchema.LoadSessionRequest,
-    initializeResult: EffectAcpSchema.InitializeResponse,
   ): Effect.Effect<EffectAcpSchema.LoadSessionResponse, EffectAcpErrors.AcpError> =>
     sessionLoadSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const sessionLoadTimeout = Duration.fromInputUnsafe(
           options.sessionLoadTimeout ?? defaultSessionLoadTimeout,
         );
-        const sessionLoadReplayIdleGap = Duration.fromInputUnsafe(
-          options.sessionLoadReplayIdleGap ?? defaultSessionLoadReplayIdleGap,
-        );
-
-        yield* Ref.set(
-          sessionLoadGateRef,
-          Option.some({
-            active: true,
-            sessionId: loadPayload.sessionId,
-            lastActivityAtMillis: undefined,
-            idleGap: sessionLoadReplayIdleGap,
-            initializeResult,
-          }),
-        );
+        yield* Ref.set(sessionLoadGateRef, Option.some({ sessionId: loadPayload.sessionId }));
 
         return yield* Effect.gen(function* () {
           yield* logRequest({
@@ -1990,14 +1932,8 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
             status: "started",
           });
 
-          const idleFiber = yield* waitForSessionLoadReplayIdle({
-            gateRef: sessionLoadGateRef,
-          }).pipe(Effect.forkIn(runtimeScope));
-          const loaded = yield* Effect.raceFirst(
-            acp.agent.loadSession(loadPayload),
-            Fiber.join(idleFiber),
-          ).pipe(
-            Effect.ensuring(Fiber.interrupt(idleFiber).pipe(Effect.ignore)),
+          // Replay silence does not acknowledge session/load or its configuration.
+          const loaded = yield* acp.agent.loadSession(loadPayload).pipe(
             Effect.timeoutOption(sessionLoadTimeout),
             Effect.flatMap((result) =>
               Effect.fromOption(
@@ -2006,7 +1942,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
                   new EffectAcpErrors.AcpTransportError({
                     operation: "call-rpc",
                     method: "session/load",
-                    detail: "session/load timed out waiting for RPC response or replay idle gap",
+                    detail: "session/load timed out waiting for RPC response",
                     cause: undefined,
                   }),
               ),
@@ -2239,7 +2175,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
             ...additionalDirectories,
             mcpServers: sessionMcpServers(initializeResult),
           } satisfies EffectAcpSchema.LoadSessionRequest;
-          sessionSetupResult = yield* runLoadSessionWithReplayIdle(loadPayload, initializeResult);
+          sessionSetupResult = yield* runLoadSession(loadPayload);
         } else if (initializeResult.agentCapabilities?.sessionCapabilities?.resume != null) {
           const resumePayload = {
             sessionId,
@@ -2474,7 +2410,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
             ...sessionSetupFields(started.initializeResult),
             mcpServers: sessionMcpServers(started.initializeResult, activationOptions),
           } satisfies EffectAcpSchema.LoadSessionRequest;
-          return runLoadSessionWithReplayIdle(requestPayload, started.initializeResult);
+          return runLoadSession(requestPayload);
         }),
         Effect.flatMap((response) => adoptSession(sessionId, response)),
       ),
