@@ -65,6 +65,7 @@ const failLoadSession = process.env.T3_ACP_FAIL_LOAD_SESSION === "1";
 const failLoadSessionAfterConfigReplay =
   process.env.T3_ACP_FAIL_LOAD_SESSION_AFTER_CONFIG_REPLAY === "1";
 const emitLoadReplay = process.env.T3_ACP_EMIT_LOAD_REPLAY === "1";
+const holdLoadResponse = process.env.T3_ACP_HOLD_LOAD_RESPONSE === "1";
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
 // JSON for the `data` of an "Internal error" response to `session/new`, as
 // Antigravity sends when its runtime cannot reach its local harness.
@@ -689,6 +690,10 @@ const program = Effect.gen(function* () {
       }
       if (emitLoadReplay) {
         emitLoadReplayNotifications(requestedSessionId);
+      }
+      if (holdLoadResponse) {
+        emitLoadReplayNotifications(requestedSessionId);
+        yield* agent.raw.request("_test/finish-load", {});
       }
       yield* agent.client.sessionUpdate({
         sessionId: requestedSessionId,
