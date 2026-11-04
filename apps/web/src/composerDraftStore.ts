@@ -203,6 +203,17 @@ function clearStaleFileUploadMetadata(
   return changed ? { ...draft, files } : draft;
 }
 
+// Instance IDs and saved model choices belong to one environment. Clearing the draft's
+// choice lets the destination project/environment default resolve on the next render.
+function resetDraftModelSelection(draft: ComposerThreadDraftState): ComposerThreadDraftState {
+  return {
+    ...draft,
+    modelSelectionByProvider: {},
+    activeProvider: null,
+    modelSelectionExplicit: false,
+  };
+}
+
 export const PersistedComposerFileAttachment = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -2650,10 +2661,10 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               existingThread.environmentId !== projectRef.environmentId &&
               existingDraft !== undefined
             ) {
-              const nextDraft = clearStaleFileUploadMetadata(
-                existingDraft,
-                projectRef.environmentId,
-              );
+              let nextDraft = clearStaleFileUploadMetadata(existingDraft, projectRef.environmentId);
+              // Automatic routing chooses a machine for the selected model, so keep that choice.
+              if (options?.environmentSelection !== "auto")
+                nextDraft = resetDraftModelSelection(nextDraft);
               if (nextDraft !== existingDraft) {
                 nextDraftsByThreadKey = {
                   ...state.draftsByThreadKey,
@@ -2787,7 +2798,18 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             if (isUnchanged) {
               return state;
             }
+            const existingDraft = state.draftsByThreadKey[threadKey];
+            const resetModel =
+              nextProjectRef.environmentId !== existing.environmentId &&
+              options.environmentSelection !== "auto" &&
+              existingDraft !== undefined;
             return {
+              draftsByThreadKey: resetModel
+                ? {
+                    ...state.draftsByThreadKey,
+                    [threadKey]: resetDraftModelSelection(existingDraft),
+                  }
+                : state.draftsByThreadKey,
               draftThreadsByThreadKey: {
                 ...state.draftThreadsByThreadKey,
                 [threadKey]: nextDraftThread,
