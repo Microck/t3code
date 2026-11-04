@@ -1902,7 +1902,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
   ): Effect.fn.Return<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError> {
     const current = yield* getStartedState;
     yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
-    yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
+    yield* SubscriptionRef.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
     const nextState = {
       sessionId,
       initializeResult: current.initializeResult,
