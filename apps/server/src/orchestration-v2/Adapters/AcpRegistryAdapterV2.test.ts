@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  EnvironmentId,
   MessageId,
   NodeId,
   ProjectId,
@@ -12,7 +13,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { pendingBackgroundTurnItems } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
+import { resolveSelfInvocation, selfInvocationArgs } from "@t3tools/shared/nodeRuntime";
 import * as Exit from "effect/Exit";
 import * as TestClock from "effect/testing/TestClock";
 import * as Fiber from "effect/Fiber";
@@ -30,6 +31,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 
+import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import {
@@ -43,6 +45,8 @@ import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRe
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import { ACP_SESSION_MODE_OPTION_ID } from "@t3tools/provider-acp/server/sessionConfig";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import { t3AcpPromptWithInstructions } from "@t3tools/provider-core/server/orchestrationInstructions";
+import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import {
   decodeAcpReplayTranscript,
@@ -963,6 +967,7 @@ describe("AcpRegistryAdapterV2", () => {
       readonly storedModel?: string;
       readonly storedModePick?: string;
       readonly turnModels?: ReadonlyArray<string>;
+      readonly rejectedModel?: string;
     }) {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       // Scope release gives the replay agent at most a second to exit, so the status
@@ -1100,7 +1105,19 @@ describe("AcpRegistryAdapterV2", () => {
           configurations.push(published);
           current = target;
         }
-      }).pipe(Effect.scoped);
+      }).pipe(
+        Effect.match({
+          onFailure: (error) => {
+            assert.isDefined(input.rejectedModel);
+            assert.equal(
+              makeProviderFailure({ cause: error }).message,
+              `The agent did not accept the model "${input.rejectedModel}". Choose another model for this provider, then retry.`,
+            );
+          },
+          onSuccess: () => assert.isUndefined(input.rejectedModel),
+        }),
+        Effect.scoped,
+      );
       yield* Effect.all(agentExits, { discard: true });
       yield* makeAcpReplayCompletenessAssertion(fileSystem, statusPath, transcript);
       return { configurations };
@@ -1267,8 +1284,70 @@ describe("AcpRegistryAdapterV2", () => {
         }).pipe(Effect.provide(layerTest), Effect.scoped),
     );
 
+    it.effect.each([
+      "config",
+      "legacy",
+      "updated-config",
+      "removed-config",
+      "configuration-update",
+      "unavailable-before-configuration",
+    ] as const)(
+      "rejects an unavailable explicit model in a %s catalog before inference",
+      (catalog) => {
+        const duringTurn = catalog === "updated-config" || catalog === "removed-config";
+        const duringConfiguration = catalog === "configuration-update";
+        const changesOptions =
+          duringConfiguration || catalog === "unavailable-before-configuration";
+        const model = duringTurn || duringConfiguration ? "hermes" : "missing";
+        const restrictedOption = {
+          ...modelOption("model", "other"),
+          options: [{ value: "other", name: "Other" }],
+        };
+        return openWithStoredPicks({
+          setup: {
+            ...(catalog === "legacy" || catalog === "removed-config"
+              ? {
+                  models: {
+                    currentModelId: "other",
+                    availableModels: [{ modelId: "other", name: "Other" }],
+                  },
+                }
+              : {}),
+            configOptions:
+              catalog === "legacy"
+                ? []
+                : [
+                    {
+                      ...modelOption("model", "hermes"),
+                      options: [{ value: "hermes", name: "Hermes" }],
+                    },
+                    ...(changesOptions ? [permissionModeOption("ask")] : []),
+                  ],
+          },
+          storedModel: model,
+          ...(duringTurn ? { turnModels: [model, model] } : {}),
+          ...(changesOptions ? { storedModePick: "auto" } : {}),
+          rejectedModel: model,
+          pickFrames: duringTurn
+            ? prompt(configOptionUpdate(catalog === "removed-config" ? [] : [restrictedOption]))
+            : duringConfiguration
+              ? [
+                  outbound("session/set_config_option", {
+                    sessionId: "agent-session",
+                    configId: "permission-mode",
+                    value: "auto",
+                  }),
+                  answer("session/set_config_option", {
+                    configOptions: [restrictedOption, permissionModeOption("auto")],
+                  }),
+                ]
+              : [],
+        }).pipe(Effect.provide(layerTest), Effect.scoped);
+      },
+    );
+
     // regression: #19519 models come from session model state, not a hardcoded list
-    it.effect("leaves unadvertised model IDs alone in both model selection protocols", () =>
+    it.effect("keeps unadvertised default and auto selections agent-controlled", () =>
       Effect.gen(function* () {
         const { configurations } = yield* openWithStoredPicks({
           setup: {
@@ -1278,15 +1357,7 @@ describe("AcpRegistryAdapterV2", () => {
             },
           },
           storedModel: "default",
-          turnModels: [
-            "auto",
-            "removed-model",
-            "other",
-            "default",
-            "auto",
-            "hermes",
-            "removed-model",
-          ],
+          turnModels: ["auto", "default", "other", "default", "auto", "default", "auto"],
           pickFrames: [
             ...prompt(),
             ...prompt(),
@@ -1484,10 +1555,9 @@ describe("AcpRegistryAdapterV2", () => {
         undefined,
         false,
       );
-      assert.isDefined(fallback.runtime.hasPendingBackgroundWork);
-      assert.isFalse(
-        yield* fallback.runtime.hasPendingBackgroundWork!,
-        "without retained RPC work the generic probe must not change ordinary idle release",
+      assert.isUndefined(
+        fallback.runtime.hasPendingBackgroundWork,
+        "an adapter without a continuation dispatcher must use ordinary prompt completion",
       );
       yield* fallback.runtime.startTurn(fallback.turnInput(1));
       const completed = yield* fallback.until((event) => event.type === "turn.terminal");
@@ -1505,63 +1575,260 @@ describe("AcpRegistryAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect.each([false, true])(
-    "fails Claude's waiting foreground tool on idle error (child: %s)",
-    (withChild) =>
+  // regression: #26695 cancelling a Copilot prompt kills its background agents
+  it.effect("never steers Copilot by cancelling its prompt", () =>
+    Effect.gen(function* () {
+      const steering = Effect.fn("steering")(function* (config: Record<string, unknown>) {
+        const instanceId = ProviderInstanceId.make("acp-registry-steering");
+        const adapter = yield* makeAcpRegistryAdapterV2({
+          selfInvocation: yield* resolveSelfInvocation(),
+          instanceId,
+          settings: yield* decodeAcpRegistryAdapterSettings(config),
+          environment: {},
+        }).pipe(Effect.provide(layerInjectedRuntimeCatalog));
+        const { turns } = yield* adapter.getCapabilities();
+        return {
+          supportsInterrupt: turns.supportsInterrupt,
+          supportsActiveSteering: turns.supportsActiveSteering,
+          supportsSteeringByInterruptRestart: turns.supportsSteeringByInterruptRestart,
+        };
+      });
+      const copilot = {
+        supportsInterrupt: true,
+        supportsActiveSteering: false,
+        supportsSteeringByInterruptRestart: false,
+      };
+
+      assert.deepEqual(yield* steering({ agentId: "github-copilot-cli" }), copilot);
+      assert.deepEqual(
+        yield* steering({ source: "local", commandPath: "C:\\tools\\copilot.cmd" }),
+        copilot,
+      );
+      assert.deepEqual(yield* steering({ agentId: "gemini" }), {
+        ...copilot,
+        supportsSteeringByInterruptRestart: true,
+      });
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("gives Copilot T3's MCP server over HTTP when it advertises HTTP", () =>
+    Effect.gen(function* () {
+      const selfInvocation = yield* resolveSelfInvocation();
+      const mockAgentPath = yield* (yield* Path.Path).fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+      const endpoint = "http://127.0.0.1:43123/mcp";
+      const sessionMcpServers = Effect.fn("sessionMcpServers")(function* (
+        config: Record<string, unknown>,
+        agentEnvironment: Record<string, string> = {},
+      ) {
+        const requests: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+        const instanceId = ProviderInstanceId.make("acp-registry-mcp-transport");
+        const threadId = ThreadId.make("thread-acp-registry-mcp-transport");
+        const mcpSession = {
+          environmentId: EnvironmentId.make("environment-acp-registry-mcp-transport"),
+          threadId,
+          providerSessionId: "mcp-session-acp-registry-mcp-transport",
+          providerInstanceId: instanceId,
+          endpoint,
+          browserToolsAvailable: false,
+        };
+        yield* mcpSessions.set({ ...mcpSession, authorizationHeader: "Bearer opened-token" });
+        const adapter = yield* makeAcpRegistryAdapterV2({
+          selfInvocation,
+          instanceId,
+          settings: yield* decodeAcpRegistryAdapterSettings(config),
+          environment: {},
+          nativeLogging: () => ({
+            requestLogger: (event) =>
+              Effect.sync(() => {
+                if (event.status === "started") requests.push(event);
+              }),
+          }),
+        }).pipe(
+          Effect.provide(
+            Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({
+              resolve: () =>
+                Effect.succeed({
+                  distribution: "local" as const,
+                  spawn: {
+                    command: process.execPath,
+                    args: [mockAgentPath],
+                    env: { T3_ACP_SESSION_LIFECYCLE: "1", ...agentEnvironment },
+                  },
+                }),
+            }),
+          ),
+        );
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-registry-mcp-transport"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* mcpSessions.set({ ...mcpSession, authorizationHeader: "Bearer rotated-token" });
+        yield* runtime.resumeThread({
+          providerThread: {
+            ...providerThread,
+            nativeThreadRef: {
+              driver: ACP_REGISTRY_PROVIDER,
+              nativeId: "mock-session-2",
+              strength: "strong",
+            },
+          },
+        });
+        const sent = (method: string) => {
+          const payload = requests.find((event) => event.method === method)?.payload;
+          return typeof payload === "object" && payload !== null
+            ? Reflect.get(payload, "mcpServers")
+            : undefined;
+        };
+        return { new: sent("session/new"), load: sent("session/load") };
+      });
+      const http = (authorization: string) => [
+        {
+          type: "http",
+          name: "t3-code",
+          url: endpoint,
+          headers: [{ name: "Authorization", value: authorization }],
+        },
+      ];
+      const stdio = (authorization: string) => [
+        {
+          name: "t3-code",
+          command: selfInvocation.command,
+          args: [...selfInvocationArgs(selfInvocation, ["acp-mcp-bridge"])],
+          env: [
+            { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+            { name: "T3_ACP_MCP_ENDPOINT", value: endpoint },
+            { name: "T3_ACP_MCP_AUTHORIZATION", value: authorization },
+          ],
+        },
+      ];
+
+      assert.deepEqual(
+        yield* sessionMcpServers({ agentId: "github-copilot-cli" }, { T3_ACP_MCP_HTTP: "1" }),
+        { new: http("Bearer opened-token"), load: http("Bearer rotated-token") },
+      );
+      const acp = [{ type: "acp", name: "t3-code", serverId: "t3-code" }];
+      assert.deepEqual(
+        yield* sessionMcpServers(
+          { agentId: "github-copilot-cli" },
+          { T3_ACP_MCP_HTTP: "1", T3_ACP_MCP_ACP: "1" },
+        ),
+        { new: acp, load: acp },
+      );
+      assert.deepEqual(yield* sessionMcpServers({ agentId: "github-copilot-cli" }), {
+        new: stdio("Bearer opened-token"),
+        load: stdio("Bearer rotated-token"),
+      });
+      assert.deepEqual(yield* sessionMcpServers({ agentId: "gemini" }, { T3_ACP_MCP_HTTP: "1" }), {
+        new: stdio("Bearer opened-token"),
+        load: stdio("Bearer rotated-token"),
+      });
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect.each(["before", "after"] as const)(
+    "reconciles a full prompt echo %s acknowledgment",
+    (ordering) =>
       Effect.gen(function* () {
-        const gate = makeProviderReplayGate(["child-done"]);
+        const runtimeInstructions = {
+          type: "text",
+          text: buildRuntimeInstructions({ harness: "acpRegistry", model: "default" }),
+        };
+        const promptBlocks = (ordinal: number) => [
+          {
+            type: "text",
+            text:
+              ordinal === 1
+                ? t3AcpPromptWithInstructions({
+                    prompt: "test prompt",
+                    state: { interactionMode: "default", hasT3Mcp: false, hasDeviceTools: false },
+                  })
+                : "test prompt",
+          },
+          runtimeInstructions,
+        ];
+        const echo = (messageId: string, content: ReadonlyArray<unknown>) =>
+          claudeFrames.update(CLAUDE_ROOT_SESSION, {
+            sessionUpdate: "user_message",
+            messageId,
+            content,
+          });
+        const promptText = (ordinal: number) =>
+          promptBlocks(ordinal)
+            .map((block) => block.text)
+            .join("\n");
+        const frames = (ordinal: number) => {
+          const [request, , acknowledgment] = claudeFrames.prompt(ordinal);
+          const matching = echo(`echo-${ordinal}`, promptBlocks(ordinal));
+          return [
+            request,
+            echo("different-blocks", [
+              {
+                type: "text",
+                text: promptText(ordinal),
+              },
+            ]),
+            ...(ordering === "before" ? [matching, acknowledgment] : [acknowledgment, matching]),
+            claudeFrames.update(CLAUDE_ROOT_SESSION, {
+              sessionUpdate: "user_message_chunk",
+              messageId: `echo-${ordinal}`,
+              content: { type: "text", text: "updated echo" },
+            }),
+            echo(`echo-${ordinal}`, [{ type: "text", text: "updated echo" }]),
+            echo("second-id", promptBlocks(ordinal)),
+            echo("unmatched", [{ type: "text", text: "Continue the review." }]),
+            claudeFrames.idle("end_turn"),
+          ];
+        };
         const session = yield* openClaudeReplaySession(
           [
             ...claudeFrames.open,
-            ...claudeFrames.prompt(1),
-            ...(withChild ? claudeChild : []),
-            claudeFrames.update(CLAUDE_ROOT_SESSION, {
-              sessionUpdate: "state_update",
-              state: "requires_action",
-            }),
-            claudeFrames.update(CLAUDE_ROOT_SESSION, {
-              sessionUpdate: "state_update",
-              state: "idle",
-              stopReason: "error",
-              error: { code: -32603, message: "Provider failed while waiting" },
-            }),
-            {
-              ...claudeFrames.childState(CLAUDE_ROOT_SESSION, "child-1", "idle"),
-              label: "child-done",
-            },
-            claudeMarker("child settled"),
+            ...frames(1),
+            ...frames(2),
+            claudeFrames.closeRequest,
+            claudeFrames.closed,
           ],
-          gate,
+          undefined,
+          false,
         );
-        yield* session.runtime.startTurn(session.turnInput(1));
-        const failed = yield* session.until((event) => event.type === "turn.terminal");
-        const terminal = failed.at(-1)!;
-        if (terminal.type !== "turn.terminal") throw new Error("Missing failed terminal");
-        assert.equal(terminal.status, "failed");
-        const waiting = failed.filter(
-          (event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.nativeItemRef?.nativeId?.endsWith(":requires-action"),
-        );
-        assert.isAtLeast(waiting.length, 2);
-        const last = waiting.at(-1)!;
-        if (last.type !== "turn_item.updated") throw new Error("Missing waiting tool");
-        assert.equal(last.turnItem.status, "failed");
-        if (withChild) {
-          assert.isTrue(yield* session.runtime.hasPendingBackgroundWork!);
-          assert.isFalse(
-            failed.some(
-              (event) => event.type === "subagent.updated" && event.subagent.status === "failed",
-            ),
+        for (const ordinal of [1, 2]) {
+          yield* session.runtime.startTurn(session.turnInput(ordinal));
+          const events = yield* session.until((event) => event.type === "turn.terminal");
+          const messages = events.flatMap((event) =>
+            event.type === "message.updated" && event.message.role === "user"
+              ? [event.message]
+              : [],
           );
-          gate.release("child-done");
-          const settled = yield* session.throughMarker("child settled");
-          assert.isTrue(
-            settled.some(
-              (event) => event.type === "subagent.updated" && event.subagent.status === "completed",
-            ),
+          const items = events.flatMap((event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "user_message"
+              ? [event.turnItem]
+              : [],
           );
-          assert.isFalse(settled.some((event) => event.type === "turn.terminal"));
+          const expected = new Set([promptText(ordinal), "Continue the review."]);
+          assert.deepEqual(new Set(messages.map((message) => message.text)), expected);
+          assert.equal(new Set(messages.map((message) => message.id)).size, 3);
+          assert.equal(new Set(items.map((item) => item.id)).size, 3);
+          for (const id of ["different-blocks", "second-id", "unmatched"]) {
+            assert.isTrue(
+              items.some((item) => item.nativeItemRef?.nativeId?.endsWith(`:user:message:${id}`)),
+              `${id} remains visible`,
+            );
+          }
         }
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
@@ -1707,7 +1974,6 @@ describe("AcpRegistryAdapterV2", () => {
         [
           { usedTokens: 2_500, maxTokens: 10_000, cost: { amount: 0.42, currency: "USD" } },
           { usedTokens: 2_500, maxTokens: 10_000, cost: { amount: 0.42, currency: "USD" } },
-          { usedTokens: 3_000 },
         ],
       );
       assert.deepEqual(childThreads.at(-1)?.nativeMetadata, {
@@ -2400,174 +2666,173 @@ describe("AcpRegistryAdapterV2", () => {
       assert.isFalse(yield* queued.runtime.hasPendingBackgroundWork!);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
-});
 
-describe("registry confirmed Stop after RPC failure", () => {
-  it.live.each([
-    { name: "registry", settings: { agentId: "fixture-agent" } },
+  it.effect.each([
     {
-      name: "local OMP",
-      settings: { source: "local", commandPath: "/usr/bin/omp", commandArgs: ["acp"] },
+      failure: "a lost session",
+      error: {
+        code: -32603,
+        message: "Internal error",
+        data: {
+          details:
+            "Request session.send failed with message: session event delivery failed: session not found: copilot-session",
+        },
+      },
+      restarts: true,
     },
-    { name: "Devin", settings: { agentId: "devin" } },
-    { name: "Droid", settings: { agentId: "factory-droid" } },
-    { name: "Vibe", settings: { agentId: "mistral-vibe" } },
-    { name: "Copilot", settings: { agentId: "github-copilot-cli" } },
-  ])("contains the real $name runtime and terminalizes retained work", ({ settings }) =>
+    {
+      failure: "a lost session reported in the message",
+      error: {
+        code: -32603,
+        message:
+          "Request session.send failed with message: session event delivery failed: session not found: copilot-session",
+      },
+      restarts: true,
+    },
+    {
+      failure: "a session-lock timeout",
+      error: {
+        code: -32603,
+        message: "Internal error",
+        data: {
+          details:
+            "session lock unavailable during is_session_generation_current: acquisition timed out",
+        },
+      },
+      restarts: true,
+    },
+    {
+      failure: "a session-lock timeout reported in the message",
+      error: {
+        code: -32603,
+        message:
+          "Request session.send failed with message: session lock unavailable during is_session_generation_current: acquisition timed out",
+      },
+      restarts: true,
+    },
+    {
+      failure: "an unrelated internal error",
+      error: {
+        code: -32603,
+        message: "Request session.send failed with message: Session directory no longer exists",
+      },
+      restarts: false,
+    },
+  ] as const)("runs Copilot's next message after $failure", ({ error, restarts }) =>
     Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const children: Array<ReturnType<typeof ChildProcessSpawner.makeHandle>> = [];
-      const observed = ChildProcessSpawner.make((command) =>
-        spawner.spawn(command).pipe(
-          Effect.tap((handle) =>
-            Effect.sync(() => {
-              children.push(handle);
-            }),
-          ),
-        ),
-      );
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      const replayDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-copilot-lost-" });
+      const scriptPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-replay-agent.ts", import.meta.url),
       );
-      yield* Effect.gen(function* () {
-        const instanceId = ProviderInstanceId.make("registry-failed-stop");
-        const threadId = ThreadId.make("thread-registry-failed-stop");
-        const adapter = yield* makeAcpRegistryAdapterV2({
-          instanceId,
-          selfInvocation: yield* resolveSelfInvocation(),
-          settings: yield* decodeAcpRegistryAdapterSettings(settings),
-          environment: {},
-        }).pipe(
-          Effect.provide(
-            Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({
-              resolve: () =>
-                Effect.succeed({
-                  distribution: "local" as const,
-                  spawn: {
-                    command: process.execPath,
-                    args: [mockAgentPath],
-                    env: {
-                      T3_ACP_ACTIVE_TOOL_OUTCOME: "failed",
-                      ...(settings.agentId === "devin"
-                        ? { T3_ACP_CREATE_CLIENT_TERMINAL: "1" }
-                        : {}),
-                    },
-                  },
-                }),
-            }),
-          ),
-        );
-        const modelSelection = { instanceId, model: "default" } as const;
-        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          cwd: process.cwd(),
-        });
-        const runtime = yield* adapter.openSession({
-          threadId,
-          providerSessionId: ProviderSessionId.make("session-registry-failed-stop"),
-          modelSelection,
-          runtimePolicy,
-        });
-        const providerThread = yield* runtime.ensureThread({
-          threadId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* runtime.startTurn(
-          makeTurnInput({
-            threadId,
-            providerThread,
-            instanceId,
-            runtimePolicy,
-            now: yield* DateTime.now,
+      const request = (method: string, params: unknown = "<any>") => ({
+        type: "expect_outbound",
+        frame: { kind: "request", method, params },
+      });
+      const respond = (method: string, response: object) => ({
+        type: "emit_inbound",
+        frame: { kind: "response", method, ...response },
+      });
+      const start = (sessionId: string) => [
+        request("initialize"),
+        respond("initialize", {
+          result: { protocolVersion: 1, agentCapabilities: { loadSession: true } },
+        }),
+        request("session/new"),
+        respond("session/new", { result: { sessionId } }),
+      ];
+      const failedPrompt = [
+        ...start("copilot-session"),
+        request("session/prompt"),
+        respond("session/prompt", { error }),
+      ];
+      const completedPrompt = [
+        request("session/prompt"),
+        respond("session/prompt", { result: { stopReason: "end_turn" } }),
+      ];
+      const processes = restarts
+        ? [
+            failedPrompt,
+            [
+              ...start("replacement-session"),
+              request("session/load", {
+                sessionId: "copilot-session",
+                cwd: "<workspace>",
+                mcpServers: "<any>",
+              }),
+              respond("session/load", { result: {} }),
+              ...completedPrompt,
+            ],
+          ]
+        : [[...failedPrompt, ...completedPrompt]];
+      let spawned = 0;
+      const instanceId = ProviderInstanceId.make("copilot-lost-session");
+      const adapter = yield* makeAcpRegistryAdapterV2({
+        selfInvocation: yield* resolveSelfInvocation(),
+        instanceId,
+        settings: yield* decodeAcpRegistryAdapterSettings({ agentId: "github-copilot-cli" }),
+        environment: {},
+        makeRuntime: (runtimeInput) =>
+          Effect.gen(function* () {
+            const index = spawned++;
+            const transcript = yield* decodeAcpReplayTranscript(
+              {
+                provider: ACP_REGISTRY_PROVIDER,
+                protocol: "acp.ndjson-jsonrpc",
+                version: "1",
+                scenario: `copilot-lost-session-${index}`,
+                entries: processes[index] as never,
+              },
+              ACP_REGISTRY_PROVIDER,
+            ).pipe(Effect.orDie);
+            return yield* makeAcpReplayRuntime({
+              transcript,
+              statusPath: path.join(replayDir, `status-${index}.json`),
+              scriptPath,
+              childProcessSpawner,
+              fileSystem,
+            })(runtimeInput);
           }),
-        );
-        const events = Array.from(
-          yield* runtime.events.pipe(
-            Stream.takeUntil((event) => event.type === "turn.terminal"),
-            Stream.runCollect,
-          ),
-        );
-        const terminal = events.find((event) => event.type === "turn.terminal");
-        assert.equal(terminal?.status, "failed");
-        if (terminal === undefined) return assert.fail("expected failed turn");
-        const providerTurnId = terminal.providerTurnId;
-        assert.isDefined(runtime.hasPendingBackgroundWork);
-        assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
-        assert.lengthOf(children, settings.agentId === "devin" ? 2 : 1);
-        for (const child of children) assert.isTrue(yield* child.isRunning);
-        yield* runtime.interruptTurn({
-          providerThread,
-          providerTurnId,
-          requestRuntimeRestart: true,
-        });
-        for (const child of children) {
-          yield* Effect.ignore(child.exitCode);
-          assert.isFalse(yield* child.isRunning);
-        }
-        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
-        const stopped = Array.from(
-          yield* runtime.events.pipe(
-            Stream.takeUntil(
-              (event) =>
-                event.type === "turn_item.updated" &&
-                event.turnItem.nativeItemRef?.nativeId === "tool-call-long-running-1" &&
-                event.turnItem.status === "interrupted",
+      }).pipe(Effect.provide(layerInjectedRuntimeCatalog));
+      const threadId = ThreadId.make("thread-copilot-lost-session");
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        cwd: replayDir,
+      });
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("session-copilot-lost-session"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      const runTurn = (ordinal: number) =>
+        runtime
+          .startTurn(
+            makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal }),
+          )
+          .pipe(
+            Effect.andThen(
+              runtime.events.pipe(
+                Stream.filter((event) => event.type === "turn.terminal"),
+                Stream.take(1),
+                Stream.runCollect,
+              ),
             ),
-            Stream.runCollect,
-          ),
-        );
-        const item = stopped.find(
-          (event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.nativeItemRef?.nativeId === "tool-call-long-running-1",
-        );
-        assert.equal(item?.type, "turn_item.updated");
-        if (item?.type === "turn_item.updated") {
-          assert.equal(item.turnItem.providerTurnId, providerTurnId);
-          assert.isNotNull(item.turnItem.completedAt);
-        }
-        assert.isFalse(stopped.some((event) => event.type === "turn.terminal"));
-        if (settings.agentId === "devin") {
-          const resumed = yield* runtime.resumeThread({
-            providerThread,
-            modelSelection,
-            runtimePolicy,
-          });
-          yield* runtime.startTurn(
-            makeTurnInput({
-              threadId,
-              providerThread: resumed,
-              instanceId,
-              runtimePolicy,
-              now: yield* DateTime.now,
-              ordinal: 2,
-            }),
+            Effect.map(([terminal]) => terminal?.status),
           );
-          const next = Array.from(
-            yield* runtime.events.pipe(
-              Stream.takeUntil((event) => event.type === "turn.terminal"),
-              Stream.runCollect,
-            ),
-          ).find((event) => event.type === "turn.terminal");
-          assert.equal(next?.status, "failed");
-          if (next === undefined) return assert.fail("expected resumed failed turn");
-          assert.lengthOf(children, 4);
-          assert.isTrue(yield* children[2]!.isRunning);
-          assert.isTrue(yield* children[3]!.isRunning);
-          yield* runtime.interruptTurn({
-            providerThread: resumed,
-            providerTurnId: next.providerTurnId,
-            requestRuntimeRestart: true,
-          });
-          for (const child of children) {
-            yield* Effect.ignore(child.exitCode);
-            assert.isFalse(yield* child.isRunning);
-          }
-        }
-      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, observed));
+      assert.equal(yield* runTurn(1), "failed");
+      assert.equal(yield* runTurn(2), "completed");
+      assert.equal(spawned, restarts ? 2 : 1);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 });
