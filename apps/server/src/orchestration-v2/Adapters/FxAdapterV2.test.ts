@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { describe, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import {
   MessageId,
   NodeId,
@@ -151,8 +151,19 @@ const openFxSession = Effect.fn("openFxSession")(function* (input: {
   readonly loadSessionId?: string;
   /** Then starts a turn on this model. */
   readonly turnModel?: string;
+  readonly stopAfterFailure?: boolean;
 }) {
-  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const children: Array<ReturnType<typeof ChildProcessSpawner.makeHandle>> = [];
+  const childProcessSpawner = ChildProcessSpawner.make((command) =>
+    spawner.spawn(command).pipe(
+      Effect.tap((handle) =>
+        Effect.sync(() => {
+          children.push(handle);
+        }),
+      ),
+    ),
+  );
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const replayDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -252,10 +263,44 @@ const openFxSession = Effect.fn("openFxSession")(function* (input: {
       modelSelection: turnSelection,
       runtimePolicy,
     });
-    yield* session.events.pipe(
-      Stream.takeUntil((event) => event.type === "turn.terminal"),
-      Stream.runDrain,
+    const events = Array.from(
+      yield* session.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+      ),
     );
+    if (input.stopAfterFailure) {
+      const terminal = events.find((event) => event.type === "turn.terminal");
+      assert.equal(terminal?.status, "failed");
+      if (terminal === undefined) return assert.fail("expected failed fx turn");
+      assert.lengthOf(children, 1);
+      assert.isTrue(yield* children[0]!.isRunning);
+      yield* session.interruptTurn({
+        providerThread,
+        providerTurnId: terminal.providerTurnId,
+        requestRuntimeRestart: true,
+      });
+      yield* Effect.ignore(children[0]!.exitCode);
+      assert.isFalse(yield* children[0]!.isRunning);
+      const stopped = Array.from(
+        yield* session.events.pipe(
+          Stream.takeUntil(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "failed-command" &&
+              event.turnItem.status === "interrupted",
+          ),
+          Stream.runCollect,
+        ),
+      );
+      const item = stopped.find(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === "failed-command",
+      );
+      if (item?.type === "turn_item.updated") assert.isNotNull(item.turnItem.completedAt);
+      assert.isFalse(stopped.some((event) => event.type === "turn.terminal"));
+    }
   }).pipe(Effect.scoped);
   yield* makeAcpReplayCompletenessAssertion(fileSystem, statusPath, transcript);
 });
@@ -362,6 +407,51 @@ describe("FxAdapterV2", () => {
         ),
         outbound("session/prompt"),
         answer("session/prompt", { stopReason: "end_turn" }),
+      ],
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+});
+
+describe("fx failed-RPC Stop", () => {
+  it.live("contains its real replay runtime before confirming Stop", () =>
+    openFxSession({
+      scenario: "failed-rpc-stop",
+      runtimeMode: "approval-required",
+      turnModel: "default",
+      stopAfterFailure: true,
+      frames: [
+        ...initialize,
+        outbound("session/new"),
+        answer("session/new", fxSession({ model: FX_DEFAULT_MODEL, modes: FX_0_0_13_MODES })),
+        ...setConfig("mode", "ask", fxConfig({ model: FX_DEFAULT_MODEL, modes: FX_0_0_13_MODES })),
+        outbound("session/prompt"),
+        {
+          type: "emit_inbound",
+          label: "running-command",
+          frame: {
+            kind: "notification",
+            method: "session/update",
+            params: {
+              sessionId: SESSION_ID,
+              update: {
+                sessionUpdate: "tool_call",
+                toolCallId: "failed-command",
+                kind: "execute",
+                status: "in_progress",
+                rawInput: { command: "sleep 60" },
+              },
+            },
+          },
+        },
+        {
+          type: "emit_inbound",
+          label: "prompt-failed",
+          frame: {
+            kind: "response",
+            method: "session/prompt",
+            error: { code: -32603, message: "Prompt failed with an open tool" },
+          },
+        },
       ],
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
