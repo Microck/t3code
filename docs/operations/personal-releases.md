@@ -93,24 +93,6 @@ structured progress OMP already sends through ACP. It does not create T3 child
 threads or add native-agent stop/resume controls. The shared decoder supports
 web, desktop and mobile; this workflow packages Windows and Linux only.
 
-Task rows preserve OMP's optional completion estimate, shown as `~42%` while running.
-The CLI's completion probes are disabled in ACP, so an estimate normally is not
-available; this fork does not enable probes or add model requests. Model logos in
-the picker, composer, sidebar and task rows follow the reported model family
-(OpenAI, Anthropic, Gemini or Grok), while unknown families retain the agent icon.
-
-OMP wait tools also show their native job snapshots as compact status rows.
-Task, shell and evaluation jobs retain their results, errors and exit codes;
-wait snapshots do not invent token counts or detailed task metrics.
-
-Prepared build branches contain a single source snapshot based on the automation
-commit. Application code comes from the selected official nightly plus carried
-fixes; `.github/workflows` stays exactly as reviewed on `personal-updates`.
-This avoids importing upstream workflow edits through the limited Actions token.
-Carried fixes that edit workflow files stop preparation and require a separate
-update to the fork's automation branch. No additional token or account permission
-is needed.
-
 Update everything checks the same GitHub distribution as the CLI installer,
 not npm. Standalone servers need the exact target version's platform archive
 and SHA256SUMS before they are offered an update. Desktop-managed machines

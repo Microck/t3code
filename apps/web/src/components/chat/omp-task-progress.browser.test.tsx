@@ -121,6 +121,9 @@ it("shows all four native wait jobs and retains expanded results as they settle"
     status: "running",
     label: id,
     durationMs: 180019,
+    stage: "Checking follower layouts",
+    requests: 12,
+    widget: { title: "Align content edges", stage: "Reviewing dashboard spacing", updatedAt: 1000 },
     resolvedModel: "openai-codex/gpt-6.1-sol:medium",
     resolvedModelIdentity: "openai-codex/gpt-6.1-sol",
     resolvedThinkingLevel: "medium",
@@ -140,6 +143,25 @@ it("shows all four native wait jobs and retains expanded results as they settle"
       screen
         .getByRole("group", { name: "MineOmp" })
         .getByText("openai-codex/gpt-6.1-sol", { exact: true }),
+    )
+    .toBeVisible();
+  await expect
+    .element(
+      screen
+        .getByRole("group", { name: "MineOmp" })
+        .getByText("Align content edges", { exact: true }),
+    )
+    .toBeVisible();
+  await expect
+    .element(
+      screen
+        .getByRole("group", { name: "MineOmp" })
+        .getByText("Reviewing dashboard spacing", { exact: true }),
+    )
+    .toBeVisible();
+  await expect
+    .element(
+      screen.getByRole("group", { name: "MineOmp" }).getByText("12 requests", { exact: true }),
     )
     .toBeVisible();
   const settled = readOmpTaskProgress({
