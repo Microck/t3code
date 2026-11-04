@@ -1375,7 +1375,7 @@ describe("Antigravity failed-RPC Stop", () => {
         ),
       );
       const path = yield* Path.Path;
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* SecureRandom.SecureRandom;
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -1394,7 +1394,7 @@ describe("Antigravity failed-RPC Stop", () => {
               cwd: input.cwd,
               env: { T3_ACP_ANTIGRAVITY: "1", T3_ACP_ACTIVE_TOOL_OUTCOME: "failed" },
             },
-          }).pipe(Effect.provideService(Crypto.Crypto, crypto)),
+          }).pipe(Effect.provideService(SecureRandom.SecureRandom, crypto)),
         withProcess: (_stop, task) => task,
         // @effect-diagnostics-next-line effectSucceedWithVoid:off - The optional model requires undefined, not void.
         defaultModel: Effect.succeed(undefined),
