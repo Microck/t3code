@@ -128,6 +128,10 @@ const fixes: ReadonlyArray<{
     commit: "948a618e053f236acef07e31d7cbf85bcd0fc167",
     label: "Update observable ACP config state when adopting a session",
   },
+  {
+    commit: "cd851368cf884561e257e6b1294a08bda35ff834",
+    label: "Use the current secure random service in the Antigravity stop test",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
