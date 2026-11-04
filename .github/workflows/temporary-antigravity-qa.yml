@@ -1,0 +1,22 @@
+name: Temporary Antigravity compatibility
+on:
+  push:
+    branches: [qa/antigravity-effect-4192]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          run-install: false
+          cache: true
+      - run: vp install
+      - run: vp test run apps/server/src/orchestration-v2/Adapters/AntigravityAdapterV2.test.ts
+      - run: cd apps/server && vp run typecheck
