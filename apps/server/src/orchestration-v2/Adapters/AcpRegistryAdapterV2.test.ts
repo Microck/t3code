@@ -1559,9 +1559,10 @@ describe("AcpRegistryAdapterV2", () => {
         undefined,
         false,
       );
-      assert.isUndefined(
-        fallback.runtime.hasPendingBackgroundWork,
-        "an adapter without a continuation dispatcher must use ordinary prompt completion",
+      assert.isDefined(fallback.runtime.hasPendingBackgroundWork);
+      assert.isFalse(
+        yield* fallback.runtime.hasPendingBackgroundWork!,
+        "without retained RPC work the generic probe must not change ordinary idle release",
       );
       yield* fallback.runtime.startTurn(fallback.turnInput(1));
       const completed = yield* fallback.until((event) => event.type === "turn.terminal");
@@ -2916,6 +2917,176 @@ describe("AcpRegistryAdapterV2", () => {
       assert.equal(yield* runTurn(1), "failed");
       assert.equal(yield* runTurn(2), "completed");
       assert.equal(spawned, restarts ? 2 : 1);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+});
+
+describe("registry confirmed Stop after RPC failure", () => {
+  it.live.each([
+    { name: "registry", settings: { agentId: "fixture-agent" } },
+    {
+      name: "local OMP",
+      settings: { source: "local", commandPath: "/usr/bin/omp", commandArgs: ["acp"] },
+    },
+    { name: "Devin", settings: { agentId: "devin" } },
+    { name: "Droid", settings: { agentId: "factory-droid" } },
+    { name: "Vibe", settings: { agentId: "mistral-vibe" } },
+    { name: "Copilot", settings: { agentId: "github-copilot-cli" } },
+  ])("contains the real $name runtime and terminalizes retained work", ({ settings }) =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const children: Array<ReturnType<typeof ChildProcessSpawner.makeHandle>> = [];
+      const observed = ChildProcessSpawner.make((command) =>
+        spawner.spawn(command).pipe(
+          Effect.tap((handle) =>
+            Effect.sync(() => {
+              children.push(handle);
+            }),
+          ),
+        ),
+      );
+      const path = yield* Path.Path;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      yield* Effect.gen(function* () {
+        const instanceId = ProviderInstanceId.make("registry-failed-stop");
+        const threadId = ThreadId.make("thread-registry-failed-stop");
+        const adapter = yield* makeAcpRegistryAdapterV2({
+          instanceId,
+          selfInvocation: yield* resolveSelfInvocation(),
+          settings: yield* decodeAcpRegistryAdapterSettings(settings),
+          environment: {},
+        }).pipe(
+          Effect.provide(
+            Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({
+              resolve: () =>
+                Effect.succeed({
+                  distribution: "local" as const,
+                  spawn: {
+                    command: process.execPath,
+                    args: [mockAgentPath],
+                    env: {
+                      T3_ACP_ACTIVE_TOOL_OUTCOME: "failed",
+                      ...(settings.agentId === "devin"
+                        ? { T3_ACP_CREATE_CLIENT_TERMINAL: "1" }
+                        : {}),
+                    },
+                  },
+                }),
+            }),
+          ),
+        );
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("session-registry-failed-stop"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+          }),
+        );
+        const events = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runCollect,
+          ),
+        );
+        const terminal = events.find((event) => event.type === "turn.terminal");
+        assert.equal(terminal?.status, "failed");
+        if (terminal === undefined) return assert.fail("expected failed turn");
+        const providerTurnId = terminal.providerTurnId;
+        assert.isDefined(runtime.hasPendingBackgroundWork);
+        assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+        assert.lengthOf(children, settings.agentId === "devin" ? 2 : 1);
+        for (const child of children) assert.isTrue(yield* child.isRunning);
+        yield* runtime.interruptTurn({
+          providerThread,
+          providerTurnId,
+          requestRuntimeRestart: true,
+        });
+        for (const child of children) {
+          yield* Effect.ignore(child.exitCode);
+          assert.isFalse(yield* child.isRunning);
+        }
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        const stopped = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.nativeItemRef?.nativeId === "tool-call-long-running-1" &&
+                event.turnItem.status === "interrupted",
+            ),
+            Stream.runCollect,
+          ),
+        );
+        const item = stopped.find(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === "tool-call-long-running-1",
+        );
+        assert.equal(item?.type, "turn_item.updated");
+        if (item?.type === "turn_item.updated") {
+          assert.equal(item.turnItem.providerTurnId, providerTurnId);
+          assert.isNotNull(item.turnItem.completedAt);
+        }
+        assert.isFalse(stopped.some((event) => event.type === "turn.terminal"));
+        if (settings.agentId === "devin") {
+          const resumed = yield* runtime.resumeThread({
+            providerThread,
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* runtime.startTurn(
+            makeTurnInput({
+              threadId,
+              providerThread: resumed,
+              instanceId,
+              runtimePolicy,
+              now: yield* DateTime.now,
+              ordinal: 2,
+            }),
+          );
+          const next = Array.from(
+            yield* runtime.events.pipe(
+              Stream.takeUntil((event) => event.type === "turn.terminal"),
+              Stream.runCollect,
+            ),
+          ).find((event) => event.type === "turn.terminal");
+          assert.equal(next?.status, "failed");
+          if (next === undefined) return assert.fail("expected resumed failed turn");
+          assert.lengthOf(children, 4);
+          assert.isTrue(yield* children[2]!.isRunning);
+          assert.isTrue(yield* children[3]!.isRunning);
+          yield* runtime.interruptTurn({
+            providerThread: resumed,
+            providerTurnId: next.providerTurnId,
+            requestRuntimeRestart: true,
+          });
+          for (const child of children) {
+            yield* Effect.ignore(child.exitCode);
+            assert.isFalse(yield* child.isRunning);
+          }
+        }
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, observed));
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 });
