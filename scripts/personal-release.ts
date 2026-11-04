@@ -128,6 +128,10 @@ const fixes: ReadonlyArray<{
     commit: "9ced10267d39f83673b61dd59f73049f579d3b04",
     label: "Use destination model defaults after manual draft environment switches",
   },
+  {
+    commit: "fc713377ce22d73670f204389dc0838818c0d613",
+    label: "Keep the Antigravity stop regression compatible with Effect diagnostics",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
