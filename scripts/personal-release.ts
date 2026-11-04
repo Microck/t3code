@@ -124,6 +124,10 @@ const fixes: ReadonlyArray<{
     commit: "e68f17673e2b818749e07c9a53e8faa811e4d76e",
     label: "Discover and preserve OMP thinking tiers for each model and account",
   },
+  {
+    commit: "9ced10267d39f83673b61dd59f73049f579d3b04",
+    label: "Use destination model defaults after manual draft environment switches",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
