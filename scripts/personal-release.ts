@@ -158,7 +158,11 @@ function replaceRequired(file: string, before: string, after: string) {
 // Normalize only the exact known shape; fail closed if that shape changes.
 export function normalizeAcpRandomCompatibility(source: string): string {
   const legacyImport = 'import * as Crypto from "effect/Crypto";';
-  if (!source.includes(legacyImport)) return source;
+  if (!source.includes(legacyImport)) {
+    if (/\bCrypto\b|effect\/Crypto/.test(source))
+      throw new Error("Unexpected ACP random compatibility shape: unrecognized Crypto reference");
+    return source;
+  }
   const replacements: ReadonlyArray<readonly [string, string, number]> = [
     [
       legacyImport,
@@ -182,6 +186,8 @@ export function normalizeAcpRandomCompatibility(source: string): string {
       );
     result = result.replaceAll(before, after);
   }
+  if (/\bCrypto\b|effect\/Crypto/.test(result))
+    throw new Error("Unexpected ACP random compatibility shape: residual Crypto reference");
   return result;
 }
 
