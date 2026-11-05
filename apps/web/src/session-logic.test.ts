@@ -24,6 +24,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   deriveCanInterruptRunningThread,
+  deriveLatestTaskList,
   deriveTimelineEntriesFromVisibleTurnItems,
   deriveTimelineEntriesFromVisibleTurnItemsWithState,
   deriveRevertTurnCountByUserMessageId,
@@ -612,6 +613,18 @@ describe("V2 session presentation", () => {
           steps,
         },
       ];
+
+      const cleared = {
+        ...item,
+        id: TurnItemId.make("item-tasks-cleared"),
+        updatedAt: DateTime.makeUnsafe("2026-09-04T00:01:00.000Z"),
+        steps: [],
+      };
+      expect(deriveLatestTaskList([cleared, item])).toBe(cleared);
+      expect(deriveLatestTaskList([item, cleared])).toBe(cleared);
+      expect(deriveLatestTaskList([])).toBeNull();
+      const tied = { ...item, ordinal: 1 };
+      expect(deriveLatestTaskList([tied, item])).toBe(tied);
 
       expect(
         deriveTimelineEntriesFromVisibleTurnItems({
