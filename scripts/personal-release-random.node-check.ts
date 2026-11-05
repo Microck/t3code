@@ -29,3 +29,10 @@ NodeTest.test("fails closed when the legacy shape is unexpected", () => {
     normalizeAcpRandomCompatibility(legacy.replace("Crypto.Crypto", "Unexpected")),
   );
 });
+
+NodeTest.test("rejects an unrecognized legacy import and residual namespace reference", () => {
+  NodeAssert.throws(() =>
+    normalizeAcpRandomCompatibility(legacy.replace('"effect/Crypto"', "'effect/Crypto'")),
+  );
+  NodeAssert.throws(() => normalizeAcpRandomCompatibility(legacy + "\nconst cryptoModule = Crypto;"));
+});
