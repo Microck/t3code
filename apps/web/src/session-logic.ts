@@ -239,6 +239,21 @@ export function derivePendingUserInputs(
   return [...inputs].toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
 
+export function deriveLatestTaskList(items: ThreadStructure["turnItems"]) {
+  let latest: Extract<OrchestrationV2TurnItem, { type: "todo_list" }> | null = null;
+  for (const item of items) {
+    if (item.type !== "todo_list") continue;
+    if (
+      latest === null ||
+      DateTime.toEpochMillis(item.updatedAt) > DateTime.toEpochMillis(latest.updatedAt) ||
+      (DateTime.toEpochMillis(item.updatedAt) === DateTime.toEpochMillis(latest.updatedAt) &&
+        item.ordinal > latest.ordinal)
+    )
+      latest = item;
+  }
+  return latest;
+}
+
 function planItemTime(
   projection: ThreadStructure,
   plan: Pick<OrchestrationV2PlanArtifact, "id" | "runId">,
