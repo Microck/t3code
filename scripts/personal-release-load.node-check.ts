@@ -19,6 +19,7 @@ NodeTest.test("restores response-bound session loading", () => {
   NodeAssert.match(result, /yield\* acp\.agent\.loadSession\(loadPayload\)\.pipe/);
   NodeAssert.doesNotMatch(result, /Fiber\.join\(idleFiber\)|waitForSessionLoadReplayIdle/);
   NodeAssert.match(result, /timed out waiting for RPC response"/);
+  NodeAssert.equal(normalizeLoadResponse(result), result);
 });
 NodeTest.test("leaves already-correct runtime alone", () => {
   const current = "const runLoadSession = () => acp.agent.loadSession(loadPayload);";
