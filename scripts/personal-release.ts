@@ -134,6 +134,14 @@ const fixes: ReadonlyArray<{
     commit: "fc713377ce22d73670f204389dc0838818c0d613",
     label: "Keep the Antigravity stop regression compatible with Effect diagnostics",
   },
+  {
+    commit: "dae31bf77f10974055477bff7258f9ffaf71d278",
+    label: "Keep answers visible and settle completed native OMP task and wait rows",
+  },
+  {
+    commit: "128fc052a5de1cc5da832c56f5a98351bee90fb4",
+    label: "Keep the ACP terminal fixture compatible with Effect diagnostics",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
