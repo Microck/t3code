@@ -146,6 +146,10 @@ const fixes: ReadonlyArray<{
     commit: "f6f049aa613859c4795657abcdbe02cf8138faee",
     label: "Show the current task list in the thread sidebar",
   },
+  {
+    commit: "27ed9f13f0fe98ef3d0ae4ae4952aff3ad5de640",
+    label: "Avoid loading conversation history during orchestration capability discovery",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
