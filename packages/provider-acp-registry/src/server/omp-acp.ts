@@ -124,11 +124,43 @@ const decodeOmpWaitTasks = Schema.decodeUnknownOption(
   }),
 );
 
+const decodeOmpTaskCompletion = Schema.decodeUnknownOption(
+  Schema.Struct({
+    details: Schema.Struct({
+      async: Schema.Struct({
+        type: Schema.Literal("task"),
+        jobId: TrimmedNonEmptyString,
+        state: Schema.Literals(["completed", "failed", "cancelled"]),
+      }),
+    }),
+  }),
+);
+
 // Job ids identify executions; agent handles can be reused by later jobs.
 export function extractOmpSubagentUpdates(
   tool: AcpToolCallState,
   sessionId = "",
 ): AcpAdapterV2SubagentBatch {
+  const completion = decodeOmpTaskCompletion(tool.data.rawOutput);
+  if (Option.isSome(completion)) {
+    const job = completion.value.details.async;
+    // Native completion arrives on the original tool, even without another wait.
+    return {
+      retainTool: true,
+      updates: [
+        {
+          nativeTaskId: `${sessionId}:omp-job:${job.jobId}`,
+          childSessionId: null,
+          prompt: "",
+          title: job.jobId,
+          model: null,
+          status: job.state,
+          progress: "",
+          result: null,
+        },
+      ],
+    };
+  }
   const decoded = decodeOmpWaitTasks(tool.data.rawOutput);
   if (Option.isNone(decoded)) return { updates: [], retainTool: false };
   const retainTool = decoded.value.details.jobs.some((entry) => entry.type !== "task");
