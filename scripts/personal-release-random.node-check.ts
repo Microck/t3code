@@ -1,5 +1,5 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import * as NodeAssert from "node:assert/strict";
+import * as NodeTest from "node:test";
 import { normalizeAcpRandomCompatibility } from "./personal-release.ts";
 
 const legacy = [
@@ -9,23 +9,23 @@ const legacy = [
   ...Array.from({ length: 4 }, () => "Effect.provideService(Crypto.Crypto, crypto)"),
 ].join("\n");
 
-test("normalizes the known legacy Crypto shape without changing other text", () => {
+NodeTest.test("normalizes the known legacy Crypto shape without changing other text", () => {
   const result = normalizeAcpRandomCompatibility(legacy);
-  assert.match(result, /import \* as Digest from "effect\/crypto\/Digest";/);
-  assert.match(result, /import \* as SecureRandom from "effect\/crypto\/SecureRandom";/);
-  assert.match(result, /type Requirements = Digest\.Digest \| SecureRandom\.SecureRandom;/);
-  assert.match(result, /const random = yield\* SecureRandom\.SecureRandom;/);
-  assert.equal(result.split("SecureRandom.SecureRandom, random)").length - 1, 4);
-  assert.doesNotMatch(result, /effect\/Crypto|Crypto\.Crypto/);
+  NodeAssert.match(result, /import \* as Digest from "effect\/crypto\/Digest";/);
+  NodeAssert.match(result, /import \* as SecureRandom from "effect\/crypto\/SecureRandom";/);
+  NodeAssert.match(result, /type Requirements = Digest\.Digest \| SecureRandom\.SecureRandom;/);
+  NodeAssert.match(result, /const random = yield\* SecureRandom\.SecureRandom;/);
+  NodeAssert.equal(result.split("SecureRandom.SecureRandom, random)").length - 1, 4);
+  NodeAssert.doesNotMatch(result, /effect\/Crypto|Crypto\.Crypto/);
 });
 
-test("leaves already-current code unchanged", () => {
+NodeTest.test("leaves already-current code unchanged", () => {
   const current = 'import * as SecureRandom from "effect/crypto/SecureRandom";';
-  assert.equal(normalizeAcpRandomCompatibility(current), current);
+  NodeAssert.equal(normalizeAcpRandomCompatibility(current), current);
 });
 
-test("fails closed when the legacy shape is unexpected", () => {
-  assert.throws(() =>
+NodeTest.test("fails closed when the legacy shape is unexpected", () => {
+  NodeAssert.throws(() =>
     normalizeAcpRandomCompatibility(legacy.replace("Crypto.Crypto", "Unexpected")),
   );
 });
