@@ -1651,6 +1651,7 @@ export function acpCompletedTurnShouldTerminalizeTool(
     "extractBackgroundTaskId" | "extractSubagentUpdate" | "extractSubagentUpdates"
   >,
   terminalStatus: "completed" | "failed" = "completed",
+  hasPublishedTool: boolean = false,
 ): boolean {
   const status = toolStatus(tool.status);
   if (
@@ -1660,6 +1661,8 @@ export function acpCompletedTurnShouldTerminalizeTool(
   )
     return false;
   if (flavor.extractBackgroundTaskId?.(tool) !== undefined) return false;
+  // Lineage can replace a tool only before its foreground row has been published.
+  if (hasPublishedTool) return true;
   const batch = flavor.extractSubagentUpdates?.(tool);
   if (batch !== undefined) return batch.retainTool || batch.updates.length === 0;
   return flavor.extractSubagentUpdate?.(tool) === undefined;
@@ -4176,7 +4179,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             yield* emitSubagent(context, subagentUpdate);
           if (subagentBatch.updates.length > 0) {
             if (followsAgentWorkState) yield* syncNativeChildren(context);
-            if (!subagentBatch.retainTool) {
+            // A published placeholder must receive its result even when lineage replaces the tool.
+            if (!subagentBatch.retainTool && !context.toolStartedAt.has(toolCall.toolCallId)) {
               yield* rearmDeferredFinalize(context);
               return;
             }
@@ -7941,6 +7945,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       }),
                 },
                 status,
+                context.toolStartedAt.has(tool.toolCallId),
               )
             )
               continue;
