@@ -34,5 +34,7 @@ NodeTest.test("rejects an unrecognized legacy import and residual namespace refe
   NodeAssert.throws(() =>
     normalizeAcpRandomCompatibility(legacy.replace('"effect/Crypto"', "'effect/Crypto'")),
   );
-  NodeAssert.throws(() => normalizeAcpRandomCompatibility(legacy + "\nconst cryptoModule = Crypto;"));
+  NodeAssert.throws(() =>
+    normalizeAcpRandomCompatibility(legacy + "\nconst cryptoModule = Crypto;"),
+  );
 });
