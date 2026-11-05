@@ -45,7 +45,6 @@ import {
   parseSessionModeState,
   parseSessionUpdateEvent,
   sessionUpdateCountsAsLoadReplayActivity,
-  waitForSessionLoadReplayIdle,
   sessionUpdateIsReplay,
   type SessionLoadGate,
   type AcpParsedSessionEvent,
@@ -1990,14 +1989,8 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
             status: "started",
           });
 
-          const idleFiber = yield* waitForSessionLoadReplayIdle({
-            gateRef: sessionLoadGateRef,
-          }).pipe(Effect.forkIn(runtimeScope));
-          const loaded = yield* Effect.raceFirst(
-            acp.agent.loadSession(loadPayload),
-            Fiber.join(idleFiber),
-          ).pipe(
-            Effect.ensuring(Fiber.interrupt(idleFiber).pipe(Effect.ignore)),
+          // Replay silence does not acknowledge session/load or its configuration.
+          const loaded = yield* acp.agent.loadSession(loadPayload).pipe(
             Effect.timeoutOption(sessionLoadTimeout),
             Effect.flatMap((result) =>
               Effect.fromOption(
@@ -2006,7 +1999,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
                   new EffectAcpErrors.AcpTransportError({
                     operation: "call-rpc",
                     method: "session/load",
-                    detail: "session/load timed out waiting for RPC response or replay idle gap",
+                    detail: "session/load timed out waiting for RPC response",
                     cause: undefined,
                   }),
               ),
