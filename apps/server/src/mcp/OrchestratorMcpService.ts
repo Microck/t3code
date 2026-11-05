@@ -1988,7 +1988,22 @@ const make = Effect.gen(function* () {
     }),
 
     capabilities: Effect.fn("OrchestratorMcpService.capabilities")(function* (scope) {
-      const { parent, limits } = yield* loadCaller(scope);
+      yield* requireCapability(scope);
+      const threadId = scope.thread?.threadId;
+      // Discovery only needs current settings, never the caller's conversation history.
+      const parent =
+        threadId === undefined
+          ? undefined
+          : yield* threadManagement
+              .getThreadRecords(threadId, [])
+              .pipe(
+                Effect.mapError((error) =>
+                  failure(
+                    "orchestration_error",
+                    `Unable to read thread ${threadId}: ${errorMessage(error)}`,
+                  ),
+                ),
+              );
       const providers = yield* loadProviders;
       const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
       const modelPreferences = yield* serverSettings.getSettings.pipe(
@@ -2000,8 +2015,8 @@ const make = Effect.gen(function* () {
         inheritedProviderInstanceId: parent?.thread.modelSelection.instanceId ?? null,
         inheritedModel: parent?.thread.modelSelection.model ?? null,
         inheritedOptions: parent?.thread.modelSelection.options ?? [],
-        runtimeMode: limits.runtimeMode,
-        interactionMode: limits.interactionMode,
+        runtimeMode: parent?.thread.runtimeMode ?? clientRuntimeModeCeiling(scope.client),
+        interactionMode: parent?.thread.interactionMode ?? "default",
         providers: providers.map((provider) => {
           const constraints = providerConstraints(
             provider,
