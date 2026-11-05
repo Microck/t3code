@@ -617,13 +617,17 @@ const nextBusyRetry = (session: Effect.Success<ReturnType<typeof openBusyReplayS
 
 describe("AcpRegistryAdapterV2", () => {
   it.effect.each([
-    { mixed: false, late: false },
-    { mixed: true, late: false },
-    { mixed: false, late: true },
-    { mixed: true, late: true },
+    { mixed: false, late: false, nativeCompletion: false, placeholder: false },
+    { mixed: true, late: false, nativeCompletion: false, placeholder: false },
+    { mixed: false, late: true, nativeCompletion: false, placeholder: false },
+    { mixed: true, late: true, nativeCompletion: false, placeholder: false },
+    { mixed: false, late: false, nativeCompletion: true, placeholder: false },
+    { mixed: false, late: true, nativeCompletion: true, placeholder: false },
+    { mixed: false, late: false, nativeCompletion: false, placeholder: true },
+    { mixed: false, late: true, nativeCompletion: false, placeholder: true },
   ])(
-    "projects every OMP wait job through native lineage (mixed=$mixed, late=$late)",
-    ({ mixed, late }) =>
+    "projects every OMP wait job through native lineage (mixed=$mixed, late=$late, nativeCompletion=$nativeCompletion, placeholder=$placeholder)",
+    ({ mixed, late, nativeCompletion, placeholder }) =>
       Effect.gen(function* () {
         const gate = makeProviderReplayGate(late ? ["late-results"] : []);
         const jobs = ["Report", "Validate", "Research"].map((id, index) => ({
@@ -666,20 +670,52 @@ describe("AcpRegistryAdapterV2", () => {
           [
             ...claudeFrames.open,
             ...claudeFrames.prompt(1),
+            ...(placeholder
+              ? [
+                  claudeFrames.update(CLAUDE_ROOT_SESSION, {
+                    sessionUpdate: "tool_call_update",
+                    toolCallId: "omp-wait",
+                    title: "Waiting for findings",
+                    kind: "other",
+                    status: "pending",
+                  }),
+                ]
+              : []),
             wait(jobs),
             wait(jobs),
             ...(late ? [claudeFrames.idle("end_turn")] : []),
-            {
-              ...wait(
-                jobs.map((job, index) => ({
-                  ...job,
-                  status: ["completed", "failed", "cancelled"][index],
-                  resultText: index === 0 ? "Report ready" : undefined,
-                  errorText: index === 1 ? "Validation failed" : undefined,
-                })),
-              ),
-              ...(late ? { label: "late-results" } : {}),
-            },
+            ...(nativeCompletion
+              ? jobs.map((job, index) => ({
+                  ...claudeFrames.update(CLAUDE_ROOT_SESSION, {
+                    sessionUpdate: "tool_call_update",
+                    toolCallId: `spawn-${job.id}`,
+                    status: "completed",
+                    rawOutput: {
+                      details: {
+                        async: {
+                          type: "task",
+                          jobId: job.id,
+                          state: ["completed", "failed", "cancelled"][index],
+                        },
+                        results: [],
+                      },
+                    },
+                  }),
+                  ...(late && index === 0 ? { label: "late-results" } : {}),
+                }))
+              : [
+                  {
+                    ...wait(
+                      jobs.map((job, index) => ({
+                        ...job,
+                        status: ["completed", "failed", "cancelled"][index],
+                        resultText: index === 0 ? "Report ready" : undefined,
+                        errorText: index === 1 ? "Validation failed" : undefined,
+                      })),
+                    ),
+                    ...(late ? { label: "late-results" } : {}),
+                  },
+                ]),
             claudeMarker("OMP results settled"),
             ...(!late ? [claudeFrames.idle("end_turn")] : []),
             claudeFrames.closeRequest,
@@ -721,8 +757,12 @@ describe("AcpRegistryAdapterV2", () => {
             event.turnItem.type === "dynamic_tool" &&
             event.turnItem.nativeItemRef?.nativeId?.includes("omp-wait"),
         );
-        if (mixed) {
+        if (mixed || placeholder) {
           assert.isTrue(waitRows.length > 0);
+          if (placeholder) {
+            const first = waitRows[0];
+            if (first?.type === "turn_item.updated") assert.equal(first.turnItem.status, "pending");
+          }
           const last = waitRows.at(-1);
           if (last?.type === "turn_item.updated") assert.equal(last.turnItem.status, "completed");
         } else
@@ -3048,7 +3088,10 @@ describe("registry confirmed Stop after RPC failure", () => {
         spawner.spawn(command).pipe(
           Effect.tap((handle) =>
             Effect.sync(() => {
-              children.push(handle);
+              // Count agent/terminal processes, not Windows' process-tree cleanup helpers.
+              if (command._tag !== "StandardCommand" || command.command !== "taskkill") {
+                children.push(handle);
+              }
             }),
           ),
         ),

@@ -904,7 +904,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
   });
 
-  it("folds the first assistant message and settled work before the terminal response", () => {
+  it("keeps earlier answers visible when work continues before the terminal response", () => {
     const timelineEntries = [
       {
         id: "user-entry",
@@ -927,7 +927,7 @@ describe("deriveMessagesTimelineRows", () => {
         message: {
           id: "assistant-first" as never,
           role: "assistant" as const,
-          text: "Synthetic deployment checklist\n1. Confirm the deployment is ready.",
+          text: "The harness audit is complete.\n\n![Audit](/tmp/audit.png)\n\nAll 16 adapters were checked.",
           runId: "turn-1" as never,
           createdAt: "2026-01-01T00:00:05Z",
           updatedAt: "2026-01-01T00:00:06Z",
@@ -980,8 +980,17 @@ describe("deriveMessagesTimelineRows", () => {
     expect(collapsedRows.map((row) => row.id)).toEqual([
       "user-entry",
       "turn-fold:turn-1",
+      "assistant-first-entry",
       "assistant-final-entry",
     ]);
+
+    expect(
+      collapsedRows.filter((row) => row.kind === "message").map((row) => row.message.text),
+    ).toEqual(
+      timelineEntries
+        .filter((entry) => entry.kind === "message")
+        .map((entry) => entry.message.text),
+    );
 
     const expandedRows = deriveMessagesTimelineRows({
       timelineEntries,
@@ -2130,15 +2139,16 @@ describe("deriveMessagesTimelineRows", () => {
         row.kind === "message" ? `${row.message.role}:${row.message.id}` : row.kind,
       );
 
-    expect(rows([message("new-prompt", "user", 20, "run-1")]).slice(0, 4)).toEqual([
+    expect(rows([message("new-prompt", "user", 20, "run-1")]).slice(0, 5)).toEqual([
       "user:imported-prompt",
       "turn-fold",
+      "assistant:imported-update",
       "assistant:imported-answer",
       "user:new-prompt",
     ]);
     const withoutPrompt = rows([]);
     expect(withoutPrompt).toContain("turn-fold");
-    expect(withoutPrompt).not.toContain("assistant:imported-update");
+    expect(withoutPrompt).toContain("assistant:imported-update");
 
     const timelineEntries = [
       message("imported-prompt", "user", 0),
@@ -2148,7 +2158,7 @@ describe("deriveMessagesTimelineRows", () => {
     const foldInput = { timelineEntries, latestRun: null, isWorking: false };
     const foldRunIds = timelineTurnFoldRunIdsByEntryId(foldInput);
     const foldRunId = foldRunIds.get("imported-update") ?? null;
-    expect(foldRunId).not.toBeNull();
+    expect(foldRunId).toBeNull();
     const foldRow = deriveMessagesTimelineRows({
       ...foldInput,
       turnDiffSummaries: [],
@@ -2156,14 +2166,14 @@ describe("deriveMessagesTimelineRows", () => {
     }).find((row) => row.kind === "turn-fold");
     expect(foldRow?.kind === "turn-fold" ? foldRow.runId : null).toBe(foldRunId);
     expect(foldRunIds.get("imported-answer") ?? null).toBeNull();
-    const expanded = deriveMessagesTimelineRows({
+    const presentedRows = deriveMessagesTimelineRows({
       ...foldInput,
-      expandedRunIds: new Set([foldRunId!]),
+      expandedRunIds: new Set(),
       turnDiffSummaries: [],
       supportsConversationRollback: false,
     });
     expect(
-      expanded.some((row) => row.kind === "message" && row.message.id === "imported-update"),
+      presentedRows.some((row) => row.kind === "message" && row.message.id === "imported-update"),
     ).toBe(true);
   });
 
@@ -2555,7 +2565,7 @@ describe("deriveMessagesTimelineRows", () => {
 });
 
 describe("v2 run and attempt history", () => {
-  it("folds settled-turn commentary and work behind a Worked-for row", () => {
+  it("keeps settled-turn commentary visible while folding work behind a Worked-for row", () => {
     const timelineEntries = [
       {
         id: "user-entry",
@@ -2654,6 +2664,7 @@ describe("v2 run and attempt history", () => {
     expect(collapsedRows.map((row) => row.id)).toEqual([
       "user-entry",
       "turn-fold:turn-1",
+      "assistant-thought-entry",
       "thread-created-entry",
       "assistant-final-entry",
     ]);
@@ -3611,6 +3622,18 @@ describe("linked timeline resources", () => {
           updatedAt: "2026-09-08T10:00:00Z",
         },
       },
+      {
+        kind: "work" as const,
+        id: "create-work",
+        createdAt: "2026-09-08T10:00:02Z",
+        entry: {
+          id: "create-work",
+          runId,
+          createdAt: "2026-09-08T10:00:02Z",
+          label: "Create chat",
+          tone: "tool" as const,
+        },
+      },
       event("created", "thread_created"),
       {
         kind: "message" as const,
@@ -3630,6 +3653,7 @@ describe("linked timeline resources", () => {
     const collapsed = deriveMessagesTimelineRows({ ...common, timelineEntries });
     expect(collapsed.map((row) => row.id)).toEqual([
       "turn-fold:resource-run",
+      "intro",
       "final",
       "summary:created",
       "assistant-meta:final",
@@ -3645,6 +3669,7 @@ describe("linked timeline resources", () => {
     expect(expanded.map((row) => row.id)).toEqual([
       "turn-fold:resource-run",
       "intro",
+      "create-work",
       "created",
       "final",
       "summary:created",
@@ -3671,6 +3696,18 @@ describe("linked timeline resources", () => {
     const timelineEntries = [
       message("intro", "assistant", 0),
       message("steer", "user", 1),
+      {
+        kind: "work" as const,
+        id: "create-work",
+        createdAt: "2026-09-08T10:00:02Z",
+        entry: {
+          id: "create-work",
+          runId,
+          createdAt: "2026-09-08T10:00:02Z",
+          label: "Create chat",
+          tone: "tool" as const,
+        },
+      },
       event("created", "thread_created"),
       message("after-steer", "assistant", 3),
       message("final", "assistant", 4),
@@ -3685,8 +3722,10 @@ describe("linked timeline resources", () => {
     expect(rowIds([runId])).not.toContain("created");
     expect(rowIds([segmentKey])).toEqual([
       `turn-fold:${runId}`,
+      "intro",
       "steer",
       `turn-fold:${segmentKey}`,
+      "create-work",
       "created",
       "after-steer",
       "final",
@@ -4339,6 +4378,7 @@ describe("subagent continued by a later turn", () => {
       "answer-1",
       "prompt-2",
       `turn-fold:${run2}`,
+      "answer-2",
       "closing-2",
     ]);
   });
