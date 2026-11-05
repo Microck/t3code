@@ -3,7 +3,11 @@ import * as Schema from "effect/Schema";
 import * as AcpSchema from "effect-acp/schema";
 
 import { AcpRegistrySettings } from "../settings.ts";
-import { extractOmpElicitationForm, isOmpAcpCommand } from "./omp-acp.ts";
+import {
+  extractOmpElicitationForm,
+  extractOmpSubagentUpdates,
+  isOmpAcpCommand,
+} from "./omp-acp.ts";
 
 const decodeRequest = Schema.decodeUnknownSync(AcpSchema.CreateElicitationRequest);
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
@@ -109,5 +113,79 @@ describe("OMP question forms", () => {
     expect(isOmpAcpCommand({ ...settings, commandPath: "/bin/other" })).toBe(false);
     expect(isOmpAcpCommand({ ...settings, commandArgs: [] })).toBe(false);
     expect(isOmpAcpCommand({ ...settings, source: "registry" })).toBe(false);
+  });
+});
+
+describe("OMP native subagents", () => {
+  const extract = (...args: Parameters<typeof extractOmpSubagentUpdates>) =>
+    extractOmpSubagentUpdates(...args).updates;
+  it("keeps batch identities scoped to their root session and maps reported outcomes", () => {
+    const jobs = ["Report", "Validate", "Research"].map((id, index) => ({
+      id,
+      type: "task",
+      status: "running",
+      label: id,
+      completionPercent: index * 25,
+      stage: "Reviewing sources",
+      resolvedModelIdentity: "anthropic/claude-opus-5-5",
+    }));
+    const tool = { toolCallId: "wait-1", data: { rawOutput: { details: { op: "wait", jobs } } } };
+    const updates = extract(tool, "root-a");
+    expect(updates).toHaveLength(3);
+    expect(updates.map((task) => task.progress)).toEqual([
+      "~0% · Reviewing sources",
+      "~25% · Reviewing sources",
+      "~50% · Reviewing sources",
+    ]);
+    expect(new Set(updates.map((task) => task.nativeTaskId)).size).toBe(3);
+    const mixed = extract(
+      {
+        ...tool,
+        data: {
+          rawOutput: {
+            details: { op: "wait", jobs: [...jobs, { ...jobs[0], id: "Shell", type: "bash" }] },
+          },
+        },
+      },
+      "root-a",
+    );
+    expect(mixed).toHaveLength(3);
+    expect(mixed.every((task) => task.suppressNormalTool === undefined)).toBe(true);
+    expect(extract({ ...tool, toolCallId: "wait-2" }, "root-a")).toEqual(updates);
+    expect(extract(tool, "root-b")[0]?.nativeTaskId).not.toBe(updates[0]?.nativeTaskId);
+    const settled = extract(
+      {
+        ...tool,
+        data: {
+          rawOutput: {
+            details: {
+              op: "wait",
+              jobs: jobs.map((job, index) => ({
+                ...job,
+                status: ["completed", "failed", "cancelled"][index],
+                ...(index === 0 ? { resultText: "Done" } : {}),
+                ...(index === 1 ? { errorText: "Failed" } : {}),
+              })),
+            },
+          },
+        },
+      },
+      "root-a",
+    );
+    expect(settled.map((task) => task.status)).toEqual(["completed", "failed", "cancelled"]);
+    expect(settled.map((task) => task.progress)).toEqual(["", "", ""]);
+    expect(settled.map((task) => task.result)).toEqual(["Done", "Failed", null]);
+    expect(
+      extract(
+        {
+          ...tool,
+          data: { rawOutput: { details: { op: "wait", jobs: [{ ...jobs[0], type: "bash" }] } } },
+        },
+        "root-a",
+      ),
+    ).toEqual([]);
+    expect(
+      extract({ ...tool, data: { rawOutput: { details: { progress: jobs } } } }, "root-a"),
+    ).toEqual([]);
   });
 });

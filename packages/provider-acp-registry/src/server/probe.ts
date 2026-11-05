@@ -11,7 +11,7 @@ import {
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import { AcpRegistrySettings } from "../settings.ts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -35,6 +35,8 @@ import {
 } from "@t3tools/provider-acp/server/sessionConfig";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+
+import { isOmpAcpCommand } from "./omp-acp.ts";
 
 const MAX_AUTH_METHODS = 32;
 const MAX_MODELS = 256;
@@ -316,17 +318,17 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
   ): Effect.fn.Return<
     AcpRegistryConfigurationProbeResult,
     AcpRegistryOperationError,
-    AcpRegistrySupport.AcpRegistryCatalog | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
+    | AcpRegistrySupport.AcpRegistryCatalog
+    | ChildProcessSpawner.ChildProcessSpawner
+    | SecureRandom.SecureRandom
   > {
     const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const pty = yield* Effect.serviceOption(PtyAdapter.PtyAdapter);
 
     const result = yield* Effect.gen(function* () {
-      // Resolution may install a missing registry package. Keep it inside the
-      // probe deadline so a provider refresh cannot inherit the installer's
-      // much longer timeout.
+      // Resolution may install packages; bound it by the probe deadline.
       const resolved = yield* catalog
         .resolve(input.settings, input.cwd, input.environment)
         .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
@@ -360,7 +362,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
           Layer.provide(
             Layer.mergeAll(
               Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
-              Layer.succeed(Crypto.Crypto, crypto),
+              Layer.succeed(SecureRandom.SecureRandom, random),
             ),
           ),
         ),
@@ -422,7 +424,31 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       yield* Deferred.await(commandsAdvertised).pipe(
         Effect.timeoutOption(COMMAND_ADVERTISEMENT_GRACE),
       );
-      return { resolved, started, commands: yield* Ref.get(commandsRef) };
+      const probe = acpRegistryProbeResult(
+        input.instanceId,
+        started,
+        resolved.agent?.icon ?? null,
+        {
+          command: resolved.spawn.command,
+          args: resolved.spawn.args,
+        },
+      );
+      // OMP advertises thinking levels for its selected model only. Its ACP model setter
+      // is session-local, so discover each model in this disposable session, never a live run.
+      const models = isOmpAcpCommand(input.settings)
+        ? yield* Effect.forEach(probe.models, (model) =>
+            runtime.setConfigOption(started.modelConfigId ?? "model", model.id).pipe(
+              Effect.map((response) => ({
+                ...model,
+                optionDescriptors: acpProviderOptionDescriptors({
+                  configOptions: response.configOptions,
+                  modeState: parseSessionModeState(started.sessionSetupResult),
+                }),
+              })),
+            ),
+          )
+        : probe.models;
+      return { probe: { ...probe, models }, commands: yield* Ref.get(commandsRef) };
     }).pipe(
       Effect.scoped,
       Effect.timeoutOrElse({
@@ -440,15 +466,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       ),
     );
     return {
-      probe: acpRegistryProbeResult(
-        input.instanceId,
-        result.started,
-        result.resolved.agent?.icon ?? null,
-        {
-          command: result.resolved.spawn.command,
-          args: result.resolved.spawn.args,
-        },
-      ),
+      probe: result.probe,
       slashCommands: result.commands.slashCommands,
       skills: result.commands.skills,
     };
@@ -461,7 +479,7 @@ const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagem
   function* (input: AcpRegistryManagementInput) {
     const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const runtimeCoordinator = yield* Effect.serviceOption(
       AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator,
     );
@@ -485,7 +503,7 @@ const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagem
         Layer.provide(
           Layer.mergeAll(
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
-            Layer.succeed(Crypto.Crypto, crypto),
+            Layer.succeed(SecureRandom.SecureRandom, random),
           ),
         ),
       ),

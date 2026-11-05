@@ -43,6 +43,74 @@ function catalogWithInspection(
 }
 
 describe("acpRegistrySnapshotReadiness", () => {
+  it("keeps model-specific thinking levels when another session advertises Off and Auto", () => {
+    const models = [
+      { id: "reasoning", name: "Reasoning", description: null },
+      { id: "plain", name: "Plain", description: null },
+    ];
+    const thinking = (levels: string[]) => [
+      {
+        id: "thinking",
+        label: "Thinking",
+        type: "select" as const,
+        role: "reasoning" as const,
+        options: levels.map((id) => ({ id, label: id })),
+        currentValue: levels[0],
+      },
+    ];
+    const provider = buildCheckedAcpRegistrySnapshot({
+      ...identity,
+      settings: decodeSettings({ agentId: "test-agent" }),
+      checkedAt: "2026-08-13T10:00:00.000Z",
+      inspection: {
+        status: "ready",
+        agentId: "test-agent",
+        version: "1.0.0",
+        distribution: "binary",
+      },
+      probe: {
+        probe: {
+          instanceId: identity.instanceId,
+          ready: true,
+          icon: null,
+          authMethods: [],
+          models: models.map((model) => ({
+            ...model,
+            optionDescriptors: model.id === "reasoning" ? thinking(["low", "medium", "high"]) : [],
+          })),
+          currentModelId: "plain",
+          configOptions: thinking(["off", "auto"]),
+          sessionManagement: noSessionManagement,
+        },
+        slashCommands: [],
+        skills: [],
+      },
+    });
+    expect(provider.models[1]?.capabilities?.optionDescriptors).toEqual([]);
+    const updated = applyAcpRegistryLiveConfiguration(
+      provider,
+      {
+        models,
+        currentModelId: "plain",
+        configOptions: thinking(["off", "auto"]),
+      },
+      [],
+    );
+    expect(updated.models[0]?.capabilities).toEqual(provider.models[0]?.capabilities);
+    expect(updated.models[1]?.capabilities?.optionDescriptors).toEqual(thinking(["off", "auto"]));
+    const switched = applyAcpRegistryLiveConfiguration(
+      updated,
+      {
+        models,
+        currentModelId: "reasoning",
+        configOptions: thinking(["high", "max"]),
+      },
+      [],
+    );
+    expect(switched.models[0]?.capabilities?.optionDescriptors).toEqual(thinking(["high", "max"]));
+    expect(switched.models[1]?.capabilities).toEqual(updated.models[1]?.capabilities);
+  });
+
   it("treats a live empty command advertisement as an authoritative replacement", () => {
     const provider = buildCheckedAcpRegistrySnapshot({
       ...identity,
@@ -175,6 +243,37 @@ describe("acpRegistrySnapshotReadiness", () => {
       nativeSessions: { canList: true, canLoad: true, canResume: true },
       models: [{ slug: "live-model", isDefault: true }],
     });
+
+    expect(
+      applyAcpRegistryLiveConfiguration(
+        provider,
+        { models: [], currentModelId: null, configOptions: [] },
+        [],
+      ).models,
+    ).toEqual(provider.models);
+
+    const liveOptions = [
+      {
+        id: "effort",
+        label: "Effort",
+        type: "select" as const,
+        options: [{ id: "high", label: "High" }],
+        currentValue: "high",
+      },
+    ];
+    expect(
+      applyAcpRegistryLiveConfiguration(
+        provider,
+        { models: [], currentModelId: null, configOptions: liveOptions },
+        [],
+      ).models,
+    ).toMatchObject([
+      {
+        slug: "probe-model",
+        isDefault: true,
+        capabilities: { optionDescriptors: [{ id: "effort", currentValue: "high" }] },
+      },
+    ]);
   });
 
   it("projects discovery without claiming authentication when no login methods are advertised", () => {
