@@ -9,6 +9,16 @@ export function normalizeLoadResponse(source: string): string {
       throw new Error("Unexpected ACP load compatibility shape");
     return source;
   }
+  if (!source.includes("waitForSessionLoadReplayIdle")) {
+    const directLoad = "          const loaded = yield* acp.agent.loadSession(loadPayload).pipe(";
+    if (
+      source.split(directLoad).length === 2 &&
+      !source.includes("Fiber.join(idleFiber)") &&
+      !source.includes("RPC response or replay idle gap")
+    )
+      return source;
+    throw new Error("Unexpected ACP load compatibility shape: missing idle helper");
+  }
   const before = `          const idleFiber = yield* waitForSessionLoadReplayIdle({
             gateRef: sessionLoadGateRef,
           }).pipe(Effect.forkIn(runtimeScope));
