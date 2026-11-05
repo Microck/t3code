@@ -2311,7 +2311,23 @@ const make = Effect.gen(function* () {
     }),
 
     capabilities: Effect.fn("OrchestratorMcpService.capabilities")(function* (scope, input = {}) {
-      const { parent, limits } = yield* loadCaller(scope);
+      yield* requireCapability(scope);
+      const threadId = scope.thread?.threadId;
+      // Discovery only needs current settings, never the caller's conversation history.
+      const parent =
+        threadId === undefined
+          ? undefined
+          : yield* threadManagement
+              .getThreadRecords(threadId, [])
+              .pipe(
+                Effect.mapError((error) =>
+                  failure(
+                    "orchestration_error",
+                    `Unable to read thread ${threadId}: ${errorMessage(error)}`,
+                  ),
+                ),
+              );
+      const limits = parent === undefined ? clientModeCeiling(scope.client) : parent.thread;
       const providers = yield* loadProviders;
       const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
       const settings = yield* serverSettings.getSettings.pipe(
