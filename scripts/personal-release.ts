@@ -142,6 +142,10 @@ const fixes: ReadonlyArray<{
     commit: "128fc052a5de1cc5da832c56f5a98351bee90fb4",
     label: "Keep the ACP terminal fixture compatible with Effect diagnostics",
   },
+  {
+    commit: "f6f049aa613859c4795657abcdbe02cf8138faee",
+    label: "Show the current task list in the thread sidebar",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
