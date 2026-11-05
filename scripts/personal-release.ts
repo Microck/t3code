@@ -160,15 +160,26 @@ export function normalizeAcpRandomCompatibility(source: string): string {
   const legacyImport = 'import * as Crypto from "effect/Crypto";';
   if (!source.includes(legacyImport)) return source;
   const replacements: ReadonlyArray<readonly [string, string, number]> = [
-    [legacyImport, 'import * as Digest from "effect/crypto/Digest";\nimport * as SecureRandom from "effect/crypto/SecureRandom";', 1],
+    [
+      legacyImport,
+      'import * as Digest from "effect/crypto/Digest";\nimport * as SecureRandom from "effect/crypto/SecureRandom";',
+      1,
+    ],
     ["Crypto.Crypto", "SecureRandom.SecureRandom", 6],
-    ["const crypto = yield* SecureRandom.SecureRandom;", "const random = yield* SecureRandom.SecureRandom;", 1],
+    [
+      "const crypto = yield* SecureRandom.SecureRandom;",
+      "const random = yield* SecureRandom.SecureRandom;",
+      1,
+    ],
     ["SecureRandom.SecureRandom, crypto)", "SecureRandom.SecureRandom, random)", 4],
   ];
   let result = source;
   for (const [before, after, expected] of replacements) {
     const count = result.split(before).length - 1;
-    if (count !== expected) throw new Error(`Unexpected ACP random compatibility shape: ${before} (${count}, expected ${expected})`);
+    if (count !== expected)
+      throw new Error(
+        `Unexpected ACP random compatibility shape: ${before} (${count}, expected ${expected})`,
+      );
     result = result.replaceAll(before, after);
   }
   return result;
