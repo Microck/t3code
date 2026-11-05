@@ -39,6 +39,7 @@ const emitMcpToolApprovalElicitation =
 const emitOptionalFieldElicitation = process.env.T3_ACP_EMIT_OPTIONAL_FIELD_ELICITATION;
 const grokKillTaskShape = process.env.T3_ACP_GROK_KILL_TASK_SHAPE;
 const activeToolOutcome = process.env.T3_ACP_ACTIVE_TOOL_OUTCOME;
+const createClientTerminal = process.env.T3_ACP_CREATE_CLIENT_TERMINAL === "1";
 const emitGrokBackgroundTaskPoll = process.env.T3_ACP_GROK_BACKGROUND_TASK_COMPLETION === "poll";
 const emitForeignSessionUpdates = process.env.T3_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
 const omitInitializeModelState = process.env.T3_ACP_OMIT_INITIALIZE_MODEL_STATE === "1";
@@ -1369,7 +1370,7 @@ const program = Effect.gen(function* () {
       }
 
       if (activeToolOutcome !== undefined) {
-        if (process.env.T3_ACP_CREATE_CLIENT_TERMINAL === "1") {
+        if (createClientTerminal) {
           yield* agent.raw.request("terminal/create", {
             sessionId: requestedSessionId,
             command: process.execPath,
