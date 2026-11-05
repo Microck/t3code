@@ -47,7 +47,7 @@ jobs:
           node-version: "24"
       - run: npm install --global @github/copilot@1.0.101
       - name: Test release compatibility normalization
-        run: node --test scripts/personal-release-random.test.ts
+        run: node --test scripts/personal-release-random.node-check.ts
       - name: Prepare official source with pending fixes
         id: prepare
         env:
