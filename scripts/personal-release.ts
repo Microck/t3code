@@ -153,6 +153,46 @@ function replaceRequired(file: string, before: string, after: string) {
   NodeFS.writeFileSync(file, source.replace(before, after));
 }
 
+// A conflicted carried fix can retain the pre-migration Crypto service even
+// though the current Effect version exposes Digest and SecureRandom separately.
+// Normalize only the exact known shape; fail closed if that shape changes.
+export function normalizeAcpRandomCompatibility(source: string): string {
+  const legacyImport = 'import * as Crypto from "effect/Crypto";';
+  if (!source.includes(legacyImport)) {
+    if (/\bCrypto\b|effect\/Crypto/.test(source))
+      throw new Error("Unexpected ACP random compatibility shape: unrecognized Crypto reference");
+    return source;
+  }
+  if ((source.match(/\bcrypto\b/g) ?? []).length !== 5)
+    throw new Error("Unexpected ACP random compatibility shape: extra crypto binding references");
+  const replacements: ReadonlyArray<readonly [string, string, number]> = [
+    [
+      legacyImport,
+      'import * as Digest from "effect/crypto/Digest";\nimport * as SecureRandom from "effect/crypto/SecureRandom";',
+      1,
+    ],
+    ["Crypto.Crypto", "SecureRandom.SecureRandom", 6],
+    [
+      "const crypto = yield* SecureRandom.SecureRandom;",
+      "const random = yield* SecureRandom.SecureRandom;",
+      1,
+    ],
+    ["SecureRandom.SecureRandom, crypto)", "SecureRandom.SecureRandom, random)", 4],
+  ];
+  let result = source;
+  for (const [before, after, expected] of replacements) {
+    const count = result.split(before).length - 1;
+    if (count !== expected)
+      throw new Error(
+        `Unexpected ACP random compatibility shape: ${before} (${count}, expected ${expected})`,
+      );
+    result = result.replaceAll(before, after);
+  }
+  if (/\bCrypto\b|effect\/Crypto/.test(result))
+    throw new Error("Unexpected ACP random compatibility shape: residual Crypto reference");
+  return result;
+}
+
 function resolveConflict(commit: string, allowedFiles: ReadonlyArray<string>) {
   if (!process.env.COPILOT_GITHUB_TOKEN)
     throw new Error("Set the COPILOT_GITHUB_TOKEN Actions secret to resolve conflicts.");
@@ -328,6 +368,14 @@ function prepare() {
     if (fix.pr !== undefined) applied.push(`https://github.com/${upstream}/pull/${fix.pr}`);
     else if (fix.label)
       applied.push(`${fix.label}: https://github.com/${fork}/commit/${fix.commit}`);
+  }
+  const acpDriver = "packages/provider-acp-registry/src/server/driver.ts";
+  const acpSource = NodeFS.readFileSync(acpDriver, "utf8");
+  const normalizedAcpSource = normalizeAcpRandomCompatibility(acpSource);
+  if (normalizedAcpSource !== acpSource) {
+    NodeFS.writeFileSync(acpDriver, normalizedAcpSource);
+    git("add", acpDriver);
+    git("commit", "-m", "fix(acp): retain current random and digest services");
   }
   // The CLI release index and downloads must point at the same distribution.
   replaceRequired(
