@@ -48,6 +48,13 @@ jobs:
       - run: npm install --global @github/copilot@1.0.101
       - name: Test release compatibility normalization
         run: node --test scripts/personal-release-random.node-check.ts
+      - name: Test ACP load compatibility
+        run: |
+          node --test scripts/personal-release-load.node-check.ts
+          temp="$(mktemp -d)"
+          trap 'rm -rf "$temp"' EXIT
+          cp scripts/personal-release.ts scripts/personal-release-load.ts "$temp/"
+          node --input-type=module -e 'await import(process.argv[1])' "$temp/personal-release.ts"
       - name: Prepare official source with pending fixes
         id: prepare
         env:
@@ -57,6 +64,7 @@ jobs:
         run: |
           gh auth setup-git
           cp scripts/personal-release.ts "$RUNNER_TEMP/personal-release.ts"
+          cp scripts/personal-release-load.ts "$RUNNER_TEMP/"
           cp scripts/personal-return.* "$RUNNER_TEMP/"
           node "$RUNNER_TEMP/personal-release.ts"
       - uses: actions/upload-artifact@v7

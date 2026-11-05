@@ -3,6 +3,8 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 
+import { normalizeLoadResponse } from "./personal-release-load.ts";
+
 const upstream = "pingdotgg/t3code";
 const fork = "Microck/t3code";
 const fixes: ReadonlyArray<{
@@ -376,6 +378,14 @@ function prepare() {
     NodeFS.writeFileSync(acpDriver, normalizedAcpSource);
     git("add", acpDriver);
     git("commit", "-m", "fix(acp): retain current random and digest services");
+  }
+  const acpRuntime = "packages/provider-acp/src/server/AcpSessionRuntime.ts";
+  const runtimeSource = NodeFS.readFileSync(acpRuntime, "utf8");
+  const normalizedRuntime = normalizeLoadResponse(runtimeSource);
+  if (normalizedRuntime !== runtimeSource) {
+    NodeFS.writeFileSync(acpRuntime, normalizedRuntime);
+    git("add", acpRuntime);
+    git("commit", "-m", "fix(acp): await the session load response");
   }
   // The CLI release index and downloads must point at the same distribution.
   replaceRequired(
