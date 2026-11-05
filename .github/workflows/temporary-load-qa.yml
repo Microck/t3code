@@ -1,0 +1,28 @@
+name: Temporary ACP load compatibility
+on:
+  push:
+    branches: [qa/load-response-41957599592]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout prepared source
+        env:
+          SOURCE: ${{ github.sha }}
+        run: |
+          git init .
+          git remote add origin https://github.com/Microck/t3code.git
+          git fetch --no-tags --depth=1 origin "$SOURCE"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          run-install: false
+          cache: true
+      - run: vp install
+      - run: vp test run apps/server/src/provider/acp/AcpJsonRpcConnection.test.ts packages/provider-acp/src/server/runtimeModel.test.ts
+      - run: cd apps/server && vp run typecheck
