@@ -119,6 +119,41 @@ describe("OMP question forms", () => {
 describe("OMP native subagents", () => {
   const extract = (...args: Parameters<typeof extractOmpSubagentUpdates>) =>
     extractOmpSubagentUpdates(...args).updates;
+  it("settles native task updates without requiring another wait", () => {
+    for (const state of ["completed", "failed", "cancelled"] as const) {
+      const tool = {
+        toolCallId: "spawn",
+        data: {
+          rawOutput: {
+            details: {
+              async: { state, jobId: "GuiRestored", type: "task" },
+              results: [],
+            },
+          },
+        },
+      };
+      expect(extractOmpSubagentUpdates(tool, "root")).toMatchObject({
+        retainTool: true,
+        updates: [{ nativeTaskId: "root:omp-job:GuiRestored", status: state, progress: "" }],
+      });
+      expect(
+        extractOmpSubagentUpdates(
+          {
+            ...tool,
+            data: {
+              rawOutput: {
+                details: {
+                  async: { state, jobId: "shell", type: "bash" },
+                },
+              },
+            },
+          },
+          "root",
+        ).updates,
+      ).toEqual([]);
+    }
+  });
+
   it("keeps batch identities scoped to their root session and maps reported outcomes", () => {
     const jobs = ["Report", "Validate", "Research"].map((id, index) => ({
       id,
