@@ -38,3 +38,7 @@ NodeTest.test("rejects an unrecognized legacy import and residual namespace refe
     normalizeAcpRandomCompatibility(legacy + "\nconst cryptoModule = Crypto;"),
   );
 });
+
+NodeTest.test("rejects extra uses of the renamed crypto binding", () => {
+  NodeAssert.throws(() => normalizeAcpRandomCompatibility(legacy + "\nconst saved = crypto;"));
+});
