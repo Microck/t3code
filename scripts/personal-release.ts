@@ -163,6 +163,8 @@ export function normalizeAcpRandomCompatibility(source: string): string {
       throw new Error("Unexpected ACP random compatibility shape: unrecognized Crypto reference");
     return source;
   }
+  if ((source.match(/\bcrypto\b/g) ?? []).length !== 5)
+    throw new Error("Unexpected ACP random compatibility shape: extra crypto binding references");
   const replacements: ReadonlyArray<readonly [string, string, number]> = [
     [
       legacyImport,
