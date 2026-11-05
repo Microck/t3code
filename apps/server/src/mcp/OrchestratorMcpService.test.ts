@@ -37,6 +37,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
@@ -2166,6 +2167,34 @@ describe("OrchestratorMcpService provider resolution", () => {
               attachments: [],
               dispatchMode: { type: "start_immediately" },
             });
+            // Discovery must stay independent of history size even for an active caller.
+            const statements: Array<string> = [];
+            const tracer = Tracer.make({
+              span(options) {
+                const span = new Tracer.NativeSpan(options);
+                const end = span.end.bind(span);
+                span.end = (endTime, exit) => {
+                  end(endTime, exit);
+                  const query = span.attributes.get("db.query.text");
+                  if (typeof query === "string") statements.push(query);
+                };
+                return span;
+              },
+            });
+            const capabilities = yield* service.capabilities(scope).pipe(Effect.withTracer(tracer));
+            assert.equal(capabilities.parentThreadId, parentThreadId);
+            assert.equal(capabilities.inheritedProviderInstanceId, codexInstanceId);
+            assert.equal(capabilities.inheritedModel, "gpt-5.4");
+            assert.equal(capabilities.runtimeMode, "full-access");
+            assert.equal(capabilities.interactionMode, "default");
+            const projectionTables = statements.flatMap(
+              (statement) => statement.match(/orchestration_v2_projection_\w+/g) ?? [],
+            );
+            assert.deepEqual(
+              [...new Set(projectionTables)],
+              ["orchestration_v2_projection_threads"],
+            );
+
             const request = {
               threads: [{ target: { driverKind: driver, model } }],
               clientRequestId: "create-retry",
