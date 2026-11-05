@@ -1,5 +1,8 @@
 import type { ThreadStructureRuntime } from "@t3tools/client-runtime/state/shell";
-import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import {
+  resolveThreadWorkingStartedAt,
+  type ThreadStructure,
+} from "@t3tools/client-runtime/state/models";
 import {
   type AssetResource,
   type OrchestrationV2Checkpoint,
@@ -227,6 +230,21 @@ export function derivePendingUserInputs(
   inputs: ReadonlyArray<ThreadPendingUserInput>,
 ): ThreadPendingUserInput[] {
   return [...inputs].toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+export function deriveLatestTaskList(items: ThreadStructure["turnItems"]) {
+  let latest: Extract<OrchestrationV2TurnItem, { type: "todo_list" }> | null = null;
+  for (const item of items) {
+    if (item.type !== "todo_list") continue;
+    if (
+      latest === null ||
+      DateTime.toEpochMillis(item.updatedAt) > DateTime.toEpochMillis(latest.updatedAt) ||
+      (DateTime.toEpochMillis(item.updatedAt) === DateTime.toEpochMillis(latest.updatedAt) &&
+        item.ordinal > latest.ordinal)
+    )
+      latest = item;
+  }
+  return latest;
 }
 
 const STANDALONE_V2_ITEM_TYPES = new Set<OrchestrationV2ProjectedTurnItem["item"]["type"]>([
