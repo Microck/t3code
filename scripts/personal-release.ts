@@ -154,6 +154,10 @@ const fixes: ReadonlyArray<{
     commit: "5af1eef126f1bfc035a15ef78cfbb98d18667c86",
     label: "Retain typed busy retry options alongside upstream prompt dispatch",
   },
+  {
+    commit: "6297f51a0706a4778403e58fc81e5d02da03c79d",
+    label: "Keep visible assistant answers in tool-visibility regression checks",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
