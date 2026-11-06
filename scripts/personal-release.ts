@@ -12,25 +12,25 @@ const fixes: ReadonlyArray<{
   readonly commit: string;
   readonly label?: string;
 }> = [
-  // This rebased copy preserves upstream's deletion of the obsolete web test.
-  { pr: 22466, commit: "f5ae110db9f1914938047009aee7db8d3b62bc66" },
-  { pr: 22842, commit: "d050d986b0867656ba4c7390d84eb53076d2c4c6" },
+  // Preserve upstream's message-start restrictions for side chats and fresh sessions.
+  { pr: 22466, commit: "6a6ac19fd59378b674a695f6f4af48aed4e7a354" },
+  { pr: 22842, commit: "910adfe8663687086db3c651017eb1bf6b48bbb6" },
   // Includes the activation-preference prerequisite needed for one resume after Stop.
-  { pr: 21439, commit: "66710506e8f4c710d0a6762a25da4c8fcdae0c49" },
+  { pr: 21439, commit: "962b0fe3985ee7fcb619f1adc47007c0fed9cc34" },
   { pr: 21323, commit: "60250740480898e75cb5cd75630fe38faedd2f4d" },
-  { pr: 22698, commit: "4a94f79b205d724d29e75dcebf571180c94bf36e" },
+  { pr: 22698, commit: "52751b06472502f0b147641ec63a276d341439e9" },
   { pr: 20363, commit: "a6a2b2ae7a4c433d1cba3aaba48ab6a0a70bc296" },
-  { pr: 21066, commit: "3dc6f65b586484d14b9eb94aef6b8eb60e5bef03" },
+  { pr: 21066, commit: "be8086db026326208ea37af240b76bc6eeeae88b" },
   { pr: 21770, commit: "669a88a2f2f15692ec2fdb9a70b0f12b23991d86" },
   { pr: 21801, commit: "4ec8ea9941de082bf30847e4f4b6237f63229f5c" },
-  { pr: 22972, commit: "c18c9f96e647283691d00ee3b05c96734f5d97de" },
+  { pr: 22972, commit: "2bdc5868fbe9abec2e1e7551bece085eb28ad755" },
   { pr: 26403, commit: "0a0f9e069605a862fb4db486e7a81a916b1b3691" },
   {
     commit: "ef97de218b54c8832a894b80b3e2839ee7391210",
     label: "OMP choices and custom answers in one question step",
   },
   {
-    commit: "693dd6efd581f6088c0947ea7d103bdc3ae063f6",
+    commit: "d8616c0fcf23e11b6184c7690528a94bab63eed5",
     label: "Native OMP task progress on web, desktop and mobile",
   },
   {
@@ -81,11 +81,11 @@ const fixes: ReadonlyArray<{
     label: "Keep ACP startup metadata from erasing the model catalog",
   },
   {
-    commit: "4d46442548c8c0779660d0a70a96a75c4fa76f43",
+    commit: "0f907a0e995f49d69accc6c332dd4287bc78f0ab",
     label: "Check and install OMP provider updates through its native updater",
   },
   {
-    commit: "f63533fc6d4b4eb396bfa673cf49c6e042aa7dfd",
+    commit: "47b1332ca33191483957aa4f2285efa39f885656",
     label: "Render native ACP image responses inline from durable local artifacts",
   },
   {
@@ -103,7 +103,7 @@ const fixes: ReadonlyArray<{
     label: "Fail waiting foreground tools when native ACP work ends with an error",
   },
   {
-    commit: "225b7a3fcb0ce75f96626f4b874f03d60021f71e",
+    commit: "ed1df8155e075ccc857d1e3c657c0c79126ec549",
     label: "Wait for acknowledged ACP session loads before publishing their model catalog",
   },
   {
@@ -147,8 +147,16 @@ const fixes: ReadonlyArray<{
     label: "Show the current task list in the thread sidebar",
   },
   {
-    commit: "27ed9f13f0fe98ef3d0ae4ae4952aff3ad5de640",
+    commit: "85968454dff4873f0516eb49fb7b9bde84535f82",
     label: "Avoid loading conversation history during orchestration capability discovery",
+  },
+  {
+    commit: "5af1eef126f1bfc035a15ef78cfbb98d18667c86",
+    label: "Retain typed busy retry options alongside upstream prompt dispatch",
+  },
+  {
+    commit: "6297f51a0706a4778403e58fc81e5d02da03c79d",
+    label: "Keep visible assistant answers in tool-visibility regression checks",
   },
 ];
 
