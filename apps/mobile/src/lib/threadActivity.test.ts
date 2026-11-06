@@ -1258,7 +1258,7 @@ describe("buildThreadFeed", () => {
       ),
     ).toEqual([]);
   });
-  it("hides tool calls or everything but the final answer", () => {
+  it("keeps assistant answers visible when hiding tools and limits zen to final answers", () => {
     const at = (second: number) => `2026-06-20T00:00:${String(second).padStart(2, "0")}.000Z`;
     const say = (name: string, second: number, user = false, steer = false) => ({
       ...(user ? userMessage(at(second)) : assistantMessage(at(second))),
@@ -1305,8 +1305,8 @@ describe("buildThreadFeed", () => {
       );
 
     const turn = [user, step, passed, failed, final];
-    expect(rows(turn, "hideSuccessful")).toEqual(["user", "fold", "step", "failed", "final"]);
-    expect(rows(turn, "hideAll")).toEqual(["user", "fold", "step", "final"]);
+    expect(rows(turn, "hideSuccessful")).toEqual(["user", "step", "fold", "failed", "final"]);
+    expect(rows(turn, "hideAll")).toEqual(["user", "step", "final"]);
     expect(rows(turn, "zen")).toEqual(["user", "final"]);
     const [steer, answer] = [say("steer", 2, true, true), say("answer", 3)];
     expect(rows([user, steer, answer, final], "zen")).toEqual(["user", "steer", "answer", "final"]);
