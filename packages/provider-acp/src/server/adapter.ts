@@ -8895,7 +8895,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     retry,
                   }),
                 ).pipe(Effect.asVoid),
-            };
+            } satisfies NonNullable<Parameters<typeof runtime.prompt>[1]>;
             context.promptSentAt = yield* Clock.currentTimeMillis;
             if (promptInactivityTimeoutMillis !== undefined) {
               context.inactivityWatchdog = yield* watchPromptInactivity(
