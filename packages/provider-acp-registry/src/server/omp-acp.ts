@@ -4,6 +4,12 @@ import {
   type AcpAdapterV2Flavor,
 } from "@t3tools/provider-acp/server/adapter";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
+import type { AcpToolCallState } from "@t3tools/provider-acp/server/runtimeModel";
+import type {
+  AcpAdapterV2SubagentUpdate,
+  AcpAdapterV2SubagentBatch,
+} from "@t3tools/provider-acp/server/adapter";
 
 import type { AcpRegistrySettings } from "../settings.ts";
 
@@ -90,3 +96,95 @@ export const extractOmpElicitationForm: NonNullable<
     },
   };
 };
+
+const decodeOmpWaitTasks = Schema.decodeUnknownOption(
+  Schema.Struct({
+    details: Schema.Struct({
+      op: Schema.Literal("wait"),
+      jobs: Schema.Array(
+        Schema.Struct({
+          id: Schema.String,
+          type: Schema.Literals(["task", "bash", "eval"]),
+          status: Schema.Literals(["running", "completed", "failed", "cancelled"]),
+          label: Schema.String,
+          resolvedModelIdentity: Schema.optionalKey(Schema.String),
+          resolvedModel: Schema.optionalKey(Schema.String),
+          completionPercent: Schema.optionalKey(
+            Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+          ),
+          stage: Schema.optionalKey(Schema.String),
+          widget: Schema.optionalKey(
+            Schema.Struct({ title: Schema.String, stage: Schema.optionalKey(Schema.String) }),
+          ),
+          resultText: Schema.optionalKey(Schema.String),
+          errorText: Schema.optionalKey(Schema.String),
+        }),
+      ),
+    }),
+  }),
+);
+
+const decodeOmpTaskCompletion = Schema.decodeUnknownOption(
+  Schema.Struct({
+    details: Schema.Struct({
+      async: Schema.Struct({
+        type: Schema.Literal("task"),
+        jobId: TrimmedNonEmptyString,
+        state: Schema.Literals(["completed", "failed", "cancelled"]),
+      }),
+    }),
+  }),
+);
+
+// Job ids identify executions; agent handles can be reused by later jobs.
+export function extractOmpSubagentUpdates(
+  tool: AcpToolCallState,
+  sessionId = "",
+): AcpAdapterV2SubagentBatch {
+  const completion = decodeOmpTaskCompletion(tool.data.rawOutput);
+  if (Option.isSome(completion)) {
+    const job = completion.value.details.async;
+    // Native completion arrives on the original tool, even without another wait.
+    return {
+      retainTool: true,
+      updates: [
+        {
+          nativeTaskId: `${sessionId}:omp-job:${job.jobId}`,
+          childSessionId: null,
+          prompt: "",
+          title: job.jobId,
+          model: null,
+          status: job.state,
+          progress: "",
+          result: null,
+        },
+      ],
+    };
+  }
+  const decoded = decodeOmpWaitTasks(tool.data.rawOutput);
+  if (Option.isNone(decoded)) return { updates: [], retainTool: false };
+  const retainTool = decoded.value.details.jobs.some((entry) => entry.type !== "task");
+  const updates: ReadonlyArray<AcpAdapterV2SubagentUpdate> = decoded.value.details.jobs
+    .filter((job) => job.type === "task")
+    .map((job) => ({
+      nativeTaskId: `${sessionId}:omp-job:${job.id}`,
+      childSessionId: null,
+      prompt: job.widget?.title ?? "",
+      title: job.label || job.id,
+      model: job.resolvedModelIdentity ?? job.resolvedModel ?? null,
+      status: job.status,
+      progress:
+        job.status === "running"
+          ? [
+              ...(job.completionPercent === undefined
+                ? []
+                : [`~${Math.round(job.completionPercent)}%`]),
+              job.widget?.stage ?? job.stage,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : "",
+      result: job.errorText ?? job.resultText ?? null,
+    }));
+  return { updates, retainTool };
+}
