@@ -160,8 +160,8 @@ describe("mobile slash commands", () => {
           slashCommands: [{ name: "skill:logo-archive" }, { name: "compact" }, { name: "clear" }],
         },
       });
-      expect(items.map((item) => item.id)).toEqual(["pcmd:skill:logo-archive"]);
-      const item = items[0];
+      expect(items.map((item) => item.id)).toEqual(["cmd:model", "pcmd:skill:logo-archive"]);
+      const item = items.find((entry) => entry.id === "pcmd:skill:logo-archive");
       if (!item) throw new Error("Expected the advertised skill command");
       const partial = "/skill:logo";
       const replacement = "/skill:logo-archive ";

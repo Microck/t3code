@@ -8886,22 +8886,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const promptGeneration = yield* Ref.get(runtimeCallbackGeneration);
             const promptOptions = {
               dispatched: context.promptDispatched,
-                onBusy: (retry) =>
-                  runRuntimeCallbackAtGeneration(
-                    promptGeneration,
-                    reportProviderRetry({
-                      source: "busy-queue",
-                      sessionId: requestedSessionId,
-                      failure: makeProviderFailure({
-                        class: "provider_error",
-                        message:
-                          "The agent is busy. Your message is queued and will be retried automatically.",
-                        retryable: true,
-                      }),
-                      retry,
+              onBusy: (retry) =>
+                runRuntimeCallbackAtGeneration(
+                  promptGeneration,
+                  reportProviderRetry({
+                    source: "busy-queue",
+                    sessionId: requestedSessionId,
+                    failure: makeProviderFailure({
+                      class: "provider_error",
+                      message:
+                        "The agent is busy. Your message is queued and will be retried automatically.",
+                      retryable: true,
                     }),
-                  ).pipe(Effect.asVoid),
-            };
+                    retry,
+                  }),
+                ).pipe(Effect.asVoid),
+            } satisfies NonNullable<Parameters<typeof runtime.prompt>[1]>;
             context.promptSentAt = yield* Clock.currentTimeMillis;
             if (promptInactivityTimeoutMillis !== undefined) {
               context.inactivityWatchdog = yield* watchPromptInactivity(
