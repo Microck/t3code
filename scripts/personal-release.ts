@@ -155,10 +155,6 @@ const fixes: ReadonlyArray<{
     label: "Retain typed busy retry options alongside upstream prompt dispatch",
   },
   {
-    commit: "6297f51a0706a4778403e58fc81e5d02da03c79d",
-    label: "Keep visible assistant answers in tool-visibility regression checks",
-  },
-  {
     commit: "41a89fe7e50acdbd76851b1b3e864fb22c051703",
     label: "Separate ACP progress updates from final answers at tool starts",
   },
@@ -177,6 +173,10 @@ const fixes: ReadonlyArray<{
   {
     commit: "c4f9fcf3b76bc8b968cc322d3898fe58dab15b13",
     label: "Validate supplied numeric ACP answers in web, desktop and mobile",
+  },
+  {
+    commit: "631a0a1ec601dcffe4b367b5dd372be163082809",
+    label: "Fold intermediate assistant progress while preserving the final reply",
   },
 ];
 
