@@ -7,14 +7,21 @@ vi.mock(import("../ChatMarkdown"), () => ({
 
 import { render } from "../../../test/render";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
+import type { PendingUserInputDraftAnswer } from "@t3tools/client-runtime/state/pending-user-input";
 
 type Question = {
   header: string;
   question: string;
   options: { label: string; description: string }[];
+  answerType?: "number" | "integer";
+  required?: boolean;
 };
 
-const renderPanel = (questions: Question[], questionIndex = 0) =>
+const renderPanel = (
+  questions: Question[],
+  questionIndex = 0,
+  answers: Record<string, PendingUserInputDraftAnswer> = {},
+) =>
   render(
     <ComposerPendingUserInputPanel
       pendingUserInputs={[
@@ -33,13 +40,30 @@ const renderPanel = (questions: Question[], questionIndex = 0) =>
       cwd={undefined}
       threadRef={{ environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("thread") }}
       respondingRequestIds={[]}
-      answers={{}}
+      answers={answers}
       questionIndex={questionIndex}
       onToggleOption={() => {}}
       onAdvance={() => {}}
       onDismiss={() => {}}
     />,
   );
+
+it("shows a validation message for a supplied optional fractional integer", async () => {
+  await using screen = await renderPanel(
+    [
+      {
+        header: "Limit",
+        question: "How many?",
+        options: [],
+        answerType: "integer",
+        required: false,
+      },
+    ],
+    0,
+    { "question-0": { customAnswer: "1.5" } },
+  );
+  await expect.element(screen.getByRole("alert")).toHaveTextContent("Enter a whole number.");
+});
 
 it("reads a mostly Hebrew question set right to left", async () => {
   await using screen = await renderPanel([
