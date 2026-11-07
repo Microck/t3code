@@ -1121,8 +1121,7 @@ function deriveTurnFolds(input: {
       ? group.entries.findIndex((entry) => entry.id === group.terminalEntry?.id)
       : group.entries.length;
     for (const [index, entry] of group.entries.entries()) {
-      // A continuation can follow a complete answer without repeating its contents.
-      if (entry.kind === "message") {
+      if (entry.id === group.terminalEntry?.id) {
         continue;
       }
       const isCompaction = timelineEntryIsCompaction(entry);
