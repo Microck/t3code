@@ -34,7 +34,7 @@ const fixes: ReadonlyArray<{
     label: "Native OMP task progress on web, desktop and mobile",
   },
   {
-    commit: "89fdbbc27330a53d7bc282823f42f33ea2615e62",
+    commit: "97563586c5f95e63b8deb591ad22629c6a658b66",
     label: "OMP model family logos and reported completion estimates",
   },
   {
