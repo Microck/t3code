@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildPendingUserInputAnswers,
   isPendingUserInputOptionSelected,
+  pendingUserInputAnswerError,
+  canSkipPendingUserInputQuestion,
   resolvePendingUserInputAnswer,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
@@ -166,6 +168,32 @@ const compatQuestion = {
 } as const;
 
 describe("buildPendingUserInputAnswers", () => {
+  it("blocks invalid supplied optional numbers and reports a correctable error", () => {
+    const question = { id: "count", options: [], required: false, answerType: "integer" } as const;
+    for (const customAnswer of ["1.5", "two", "NaN", "Infinity", "1e999"]) {
+      const draft = { customAnswer };
+      expect(pendingUserInputAnswerError(question, draft)).not.toBeNull();
+      expect(resolvePendingUserInputAnswer(question, draft)).toBeNull();
+      expect(canSkipPendingUserInputQuestion(question, draft)).toBe(false);
+      expect(buildPendingUserInputAnswers([question], { count: draft })).toBeNull();
+    }
+    for (const customAnswer of ["", "  "]) {
+      const draft = { customAnswer };
+      expect(pendingUserInputAnswerError(question, draft)).toBeNull();
+      expect(buildPendingUserInputAnswers([question], { count: draft })).toEqual({});
+    }
+    expect(buildPendingUserInputAnswers([question], {})).toEqual({});
+    expect(buildPendingUserInputAnswers([{ ...question, required: true }], {})).toBeNull();
+    expect(buildPendingUserInputAnswers([question], { count: { customAnswer: " 3 " } })).toEqual({
+      count: "3",
+    });
+    expect(
+      buildPendingUserInputAnswers([{ ...question, answerType: "number" }], {
+        count: { customAnswer: "1.5" },
+      }),
+    ).toEqual({ count: "1.5" });
+    expect(buildPendingUserInputAnswers([question], { count: { attachmentCount: 1 } })).toBeNull();
+  });
   it("leaves an unanswered optional question out instead of blocking the reply", () => {
     const other = {
       id: "scope__other",

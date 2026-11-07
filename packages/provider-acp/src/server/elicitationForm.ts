@@ -25,7 +25,8 @@ export interface ElicitationForm {
   /**
    * Types answers as the schema declares them. Unknown keys and options are
    * dropped, as is an answer that does not fit its field. Returns undefined
-   * when a required field is left without a valid answer.
+   * when a required field is left without a valid answer, or a supplied
+   * numeric answer is invalid. Blank optional numeric fields stay unanswered.
    */
   readonly content: (
     answers: ProviderUserInputAnswers,
@@ -201,6 +202,9 @@ export function parseElicitationForm(
       question: text(property.description) ?? message,
       options: parsed.options,
       ...(required.has(id) ? {} : { required: false }),
+      ...(parsed.field.kind === "number"
+        ? { answerType: parsed.field.integer ? ("integer" as const) : ("number" as const) }
+        : {}),
       ...(parsed.field.kind === "text" || parsed.field.kind === "number"
         ? {}
         : { allowCustomAnswer: false }),
@@ -214,7 +218,13 @@ export function parseElicitationForm(
       for (const [id, field] of fields) {
         const typed = Object.hasOwn(answers, id) ? typedAnswer(field, answers[id]) : undefined;
         if (typed !== undefined) entries.push([id, typed]);
-        else if (required.has(id)) return undefined;
+        else if (
+          required.has(id) ||
+          (field.kind === "number" &&
+            Object.hasOwn(answers, id) &&
+            !(typeof answers[id] === "string" && answers[id].trim().length === 0))
+        )
+          return undefined;
       }
       // Own properties for every field, `__proto__` included; assigning to
       // `{}` would hit its inherited setter instead.
