@@ -162,6 +162,10 @@ const fixes: ReadonlyArray<{
     commit: "41a89fe7e50acdbd76851b1b3e864fb22c051703",
     label: "Separate ACP progress updates from final answers at tool starts",
   },
+  {
+    commit: "25a113262d35cf605a0cdf656c48dbc69f54f47f",
+    label: "Use native typed ACP forms while preserving OMP custom answers",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
