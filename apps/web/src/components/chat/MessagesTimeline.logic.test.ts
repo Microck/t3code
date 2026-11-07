@@ -974,7 +974,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
   });
 
-  it("keeps earlier answers visible when work continues before the terminal response", () => {
+  it("folds intermediate replies without losing their text or images", () => {
     const timelineEntries = [
       {
         id: "user-entry",
@@ -1050,17 +1050,8 @@ describe("deriveMessagesTimelineRows", () => {
     expect(collapsedRows.map((row) => row.id)).toEqual([
       "user-entry",
       "turn-fold:turn-1",
-      "assistant-first-entry",
       "assistant-final-entry",
     ]);
-
-    expect(
-      collapsedRows.filter((row) => row.kind === "message").map((row) => row.message.text),
-    ).toEqual(
-      timelineEntries
-        .filter((entry) => entry.kind === "message")
-        .map((entry) => entry.message.text),
-    );
 
     const expandedRows = deriveMessagesTimelineRows({
       timelineEntries,
@@ -1070,6 +1061,14 @@ describe("deriveMessagesTimelineRows", () => {
       turnDiffSummaries: [],
       supportsConversationRollback: false,
     });
+
+    expect(
+      expandedRows.filter((row) => row.kind === "message").map((row) => row.message.text),
+    ).toEqual(
+      timelineEntries
+        .filter((entry) => entry.kind === "message")
+        .map((entry) => entry.message.text),
+    );
 
     expect(expandedRows.map((row) => row.id)).toEqual([
       "user-entry",
@@ -2209,16 +2208,15 @@ describe("deriveMessagesTimelineRows", () => {
         row.kind === "message" ? `${row.message.role}:${row.message.id}` : row.kind,
       );
 
-    expect(rows([message("new-prompt", "user", 20, "run-1")]).slice(0, 5)).toEqual([
+    expect(rows([message("new-prompt", "user", 20, "run-1")]).slice(0, 4)).toEqual([
       "user:imported-prompt",
       "turn-fold",
-      "assistant:imported-update",
       "assistant:imported-answer",
       "user:new-prompt",
     ]);
     const withoutPrompt = rows([]);
     expect(withoutPrompt).toContain("turn-fold");
-    expect(withoutPrompt).toContain("assistant:imported-update");
+    expect(withoutPrompt).not.toContain("assistant:imported-update");
 
     const timelineEntries = [
       message("imported-prompt", "user", 0),
@@ -2228,7 +2226,7 @@ describe("deriveMessagesTimelineRows", () => {
     const foldInput = { timelineEntries, latestRun: null, isWorking: false };
     const foldRunIds = timelineTurnFoldRunIdsByEntryId(foldInput);
     const foldRunId = foldRunIds.get("imported-update") ?? null;
-    expect(foldRunId).toBeNull();
+    expect(foldRunId).not.toBeNull();
     const foldRow = deriveMessagesTimelineRows({
       ...foldInput,
       turnDiffSummaries: [],
@@ -2236,14 +2234,14 @@ describe("deriveMessagesTimelineRows", () => {
     }).find((row) => row.kind === "turn-fold");
     expect(foldRow?.kind === "turn-fold" ? foldRow.runId : null).toBe(foldRunId);
     expect(foldRunIds.get("imported-answer") ?? null).toBeNull();
-    const presentedRows = deriveMessagesTimelineRows({
+    const expanded = deriveMessagesTimelineRows({
       ...foldInput,
-      expandedRunIds: new Set(),
+      expandedRunIds: new Set([foldRunId!]),
       turnDiffSummaries: [],
       supportsConversationRollback: false,
     });
     expect(
-      presentedRows.some((row) => row.kind === "message" && row.message.id === "imported-update"),
+      expanded.some((row) => row.kind === "message" && row.message.id === "imported-update"),
     ).toBe(true);
   });
 
@@ -2635,7 +2633,7 @@ describe("deriveMessagesTimelineRows", () => {
 });
 
 describe("v2 run and attempt history", () => {
-  it("keeps settled-turn commentary visible while folding work behind a Worked-for row", () => {
+  it("folds settled-turn commentary and work behind a Worked-for row", () => {
     const timelineEntries = [
       {
         id: "user-entry",
@@ -2734,7 +2732,6 @@ describe("v2 run and attempt history", () => {
     expect(collapsedRows.map((row) => row.id)).toEqual([
       "user-entry",
       "turn-fold:turn-1",
-      "assistant-thought-entry",
       "thread-created-entry",
       "assistant-final-entry",
     ]);
@@ -3846,7 +3843,6 @@ describe("linked timeline resources", () => {
     const collapsed = deriveMessagesTimelineRows({ ...common, timelineEntries });
     expect(collapsed.map((row) => row.id)).toEqual([
       "turn-fold:resource-run",
-      "intro",
       "final",
       "summary:created",
       "assistant-meta:final",
@@ -3915,7 +3911,6 @@ describe("linked timeline resources", () => {
     expect(rowIds([runId])).not.toContain("created");
     expect(rowIds([segmentKey])).toEqual([
       `turn-fold:${runId}`,
-      "intro",
       "steer",
       `turn-fold:${segmentKey}`,
       "create-work",
@@ -4571,7 +4566,6 @@ describe("subagent continued by a later turn", () => {
       "answer-1",
       "prompt-2",
       `turn-fold:${run2}`,
-      "answer-2",
       "closing-2",
     ]);
   });
