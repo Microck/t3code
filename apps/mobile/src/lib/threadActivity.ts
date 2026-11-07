@@ -1155,8 +1155,7 @@ function deriveThreadFeedRunFolds(
       group.entries
         .filter(
           (entry) =>
-            // A continuation can follow a complete answer without repeating its contents.
-            entry.type !== "message" &&
+            entry.id !== terminalAssistantId &&
             entry.type !== "html-render" &&
             entry.type !== "mcp-app" &&
             !(entry.type === "activity-group" && isContextCompactionActivityGroup(entry)) &&
