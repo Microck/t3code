@@ -1064,7 +1064,7 @@ describe("AcpAdapterV2", () => {
 
   // regression: #21499 turns blocked only on T3 thread waits must show as waiting
   it.effect.each(["agent_message_chunk"] as const)(
-    "keeps named ACP %s open while deriving thread wait execution state",
+    "separates named ACP %s at tool starts without splitting on tool updates",
     (sessionUpdate) =>
       Effect.gen(function* () {
         type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
@@ -1123,9 +1123,19 @@ describe("AcpAdapterV2", () => {
                         status: "completed",
                       },
                       {
+                        sessionUpdate,
+                        messageId: "named-stream",
+                        content: { type: "text", text: "Child " },
+                      },
+                      {
                         sessionUpdate: "tool_call_update",
                         toolCallId: "wait",
                         status: "completed",
+                      },
+                      {
+                        sessionUpdate,
+                        messageId: "named-stream",
+                        content: { type: "text", text: "finished." },
                       },
                     ] satisfies Array<EffectAcpSchema.SessionUpdate>;
                     for (const update of updates)
@@ -1173,18 +1183,6 @@ describe("AcpAdapterV2", () => {
           const item = event.turnItem;
           retained.set(item.id, item);
           if (item.type !== "dynamic_tool" && item.type !== "command_execution") continue;
-          const streams = [...retained.values()].filter(
-            (entry) => entry.type === "assistant_message" || entry.type === "reasoning",
-          );
-          assert.deepEqual(
-            streams.map((entry) => [entry.type, entry.status]),
-            [
-              [
-                sessionUpdate === "agent_message_chunk" ? "assistant_message" : "reasoning",
-                "running",
-              ],
-            ],
-          );
           states.push(
             deriveBlockedOnThreadWait({
               activeRun: { id: input.runId, status: "running" },
@@ -1193,10 +1191,24 @@ describe("AcpAdapterV2", () => {
           );
         }
         assert.deepEqual(states, [true, false, true, false]);
+        const expectedMessages = ["Waiting for the child result", "Child finished."];
+        assert.deepEqual(
+          [...retained.values()].flatMap((item) =>
+            item.type === "assistant_message" ? [item.text] : [],
+          ),
+          expectedMessages,
+        );
+        const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
+        assert.deepEqual(
+          snapshot.messages
+            .filter((message) => message.role === "assistant")
+            .map((message) => message.text),
+          expectedMessages,
+        );
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect("starts a new replay message after ACP v2 plan boundaries", () =>
+  it.effect("keeps named replay messages separate across plan and tool boundaries", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const path = yield* Path.Path;
@@ -1250,6 +1262,7 @@ describe("AcpAdapterV2", () => {
         sessionId: "mock-session-1",
         update: {
           sessionUpdate: "agent_message_chunk",
+          messageId: "replayed-envelope",
           content: { type: "text", text: "before plan" },
         },
       });
@@ -1268,14 +1281,33 @@ describe("AcpAdapterV2", () => {
         sessionId: "mock-session-1",
         update: {
           sessionUpdate: "agent_message_chunk",
+          messageId: "replayed-envelope",
           content: { type: "text", text: "after plan" },
+        },
+      });
+      yield* sessionUpdateHandler!({
+        sessionId: "mock-session-1",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "history-tool",
+          kind: "read",
+          title: "Read result",
+          status: "completed",
+        },
+      });
+      yield* sessionUpdateHandler!({
+        sessionId: "mock-session-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "replayed-envelope",
+          content: { type: "text", text: "after tool" },
         },
       });
 
       const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
       assert.deepEqual(
         snapshot.messages.map((message) => message.text),
-        ["before plan", "after plan"],
+        ["before plan", "after plan", "after tool"],
       );
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );

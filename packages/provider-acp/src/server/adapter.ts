@@ -2696,7 +2696,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               nativeItemId:
                 sourceMessageId === null
                   ? `${context.nativeTurnId}:${kind}:${stream.nextSegment}`
-                  : `${context.nativeTurnId}:${kind}:message:${sourceMessageId}`,
+                  : `${context.nativeTurnId}:${kind}:message:${sourceMessageId}:segment:${stream.nextSegment}`,
               startedAt: now,
               sourceMessageId,
               text: "",
@@ -2727,7 +2727,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             yield* closeTextStream(context, kind);
             const now = yield* DateTime.now;
             stream.current = {
-              nativeItemId: `${context.nativeTurnId}:${kind}:message:${messageId}`,
+              nativeItemId: `${context.nativeTurnId}:${kind}:message:${messageId}:segment:${stream.nextSegment}`,
               startedAt: now,
               sourceMessageId: messageId,
               text,
@@ -3596,12 +3596,20 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         ) {
           if (settledRpcTools.has(sessionScopedId(context.nativeThreadId, incoming.toolCallId)))
             return;
-          if (context.assistant.current?.sourceMessageId == null)
+          const previous = context.tools.get(incoming.toolCallId);
+          // A newly active tool separates progress from later answer text, even
+          // when the provider reuses its message id. Completion-only reports and
+          // ongoing tool updates can interleave with a streamed paragraph.
+          if (
+            (previous === undefined &&
+              incoming.status !== "completed" &&
+              incoming.status !== "failed") ||
+            context.assistant.current?.sourceMessageId == null
+          )
             yield* closeTextStream(context, "assistant");
           if (context.reasoning.current?.sourceMessageId == null)
             yield* closeTextStream(context, "reasoning");
           yield* closeTextStream(context, "user");
-          const previous = context.tools.get(incoming.toolCallId);
           const merged = mergeToolCallState(previous, incoming);
           const normalized = flavor.normalizeToolCall?.(merged) ?? merged;
           const backgroundTaskId = flavor.extractBackgroundTaskId?.(normalized);
@@ -4270,7 +4278,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               const nativeItemId =
                 sourceMessageId === null
                   ? `${notification.sessionId}:history:${role}:${loadingIndex}`
-                  : `${notification.sessionId}:history:${role}:message:${sourceMessageId}`;
+                  : `${notification.sessionId}:history:${role}:message:${sourceMessageId}:segment:${loadingIndex}`;
               const messageId = providerMessageId(nativeItemId);
               const key = String(messageId);
               const previous = current.messages.get(key);
