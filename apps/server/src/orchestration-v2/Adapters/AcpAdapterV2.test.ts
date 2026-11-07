@@ -1847,6 +1847,7 @@ describe("AcpAdapterV2", () => {
     header: `Choice ${index + 1}`,
     question: `Which option for question ${index + 1}?`,
     options: ["Alpha", "Beta"].map((value) => ({ label: value, value, description: value })),
+    allowCustomAnswer: true,
     required: false,
     ...(index === 2 ? { multiSelect: true } : {}),
   }));
