@@ -158,6 +158,10 @@ const fixes: ReadonlyArray<{
     commit: "6297f51a0706a4778403e58fc81e5d02da03c79d",
     label: "Keep visible assistant answers in tool-visibility regression checks",
   },
+  {
+    commit: "830356856955fd16a8288a0bdea05a3e5afbc5fd",
+    label: "Separate ACP progress updates from final answers at tool starts",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
