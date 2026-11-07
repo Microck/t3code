@@ -26,6 +26,7 @@ import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { useLiveThreadLinkLabels } from "../../state/entities";
 import {
   isPendingUserInputOptionSelected,
+  pendingUserInputAnswerError,
   type PendingUserInputDraftAnswer,
 } from "@t3tools/client-runtime/state/pending-user-input";
 import type { PendingUserInput } from "../../lib/threadActivity";
@@ -228,6 +229,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
         ) : null}
         {props.pendingUserInput.questions.map((question) => {
           const draft = props.drafts[question.id];
+          const answerError = pendingUserInputAnswerError(question, draft);
           return (
             <View key={question.id} className="gap-2 pt-1">
               <Text
@@ -241,6 +243,11 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                 environmentId={props.environmentId}
                 setDirection={setDirection}
               />
+              {answerError !== null ? (
+                <Text accessibilityRole="alert" className="font-sans text-sm text-destructive">
+                  {answerError}
+                </Text>
+              ) : null}
               <View className="gap-2">
                 {question.options.map((option) => {
                   const optionValue = option.value ?? option.label.trim();
