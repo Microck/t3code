@@ -174,6 +174,10 @@ const fixes: ReadonlyArray<{
     commit: "804aceed852a4737b38fab9847a2a939c6f77702",
     label: "Assert OMP custom-answer capability in native runtime form payloads",
   },
+  {
+    commit: "c4f9fcf3b76bc8b968cc322d3898fe58dab15b13",
+    label: "Validate supplied numeric ACP answers in web, desktop and mobile",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
