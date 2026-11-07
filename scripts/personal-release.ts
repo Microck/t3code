@@ -166,6 +166,10 @@ const fixes: ReadonlyArray<{
     commit: "25a113262d35cf605a0cdf656c48dbc69f54f47f",
     label: "Use native typed ACP forms while preserving OMP custom answers",
   },
+  {
+    commit: "599bb9982d5ca081d46bacf03706cc3ce2ea47a0",
+    label: "Retain prompt-echo assertions with segmented native message IDs",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
