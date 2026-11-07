@@ -170,6 +170,10 @@ const fixes: ReadonlyArray<{
     commit: "599bb9982d5ca081d46bacf03706cc3ce2ea47a0",
     label: "Retain prompt-echo assertions with segmented native message IDs",
   },
+  {
+    commit: "804aceed852a4737b38fab9847a2a939c6f77702",
+    label: "Assert OMP custom-answer capability in native runtime form payloads",
+  },
 ];
 
 function run(command: string, args: ReadonlyArray<string>) {
