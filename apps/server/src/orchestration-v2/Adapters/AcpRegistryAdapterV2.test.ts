@@ -2074,8 +2074,9 @@ describe("AcpRegistryAdapterV2", () => {
           assert.equal(new Set(messages.map((message) => message.id)).size, 3);
           assert.equal(new Set(items.map((item) => item.id)).size, 3);
           for (const id of ["different-blocks", "second-id", "unmatched"]) {
+            const nativeId = new RegExp(`:user:message:${id}:segment:\\d+$`);
             assert.isTrue(
-              items.some((item) => item.nativeItemRef?.nativeId?.endsWith(`:user:message:${id}`)),
+              items.some((item) => nativeId.test(item.nativeItemRef?.nativeId ?? "")),
               `${id} remains visible`,
             );
           }
