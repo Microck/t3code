@@ -63,6 +63,7 @@ describe("OMP question forms", () => {
     ]);
     expect(form.questions[2]?.multiSelect).toBe(true);
     expect(form.questions.every((question) => question.required === false)).toBe(true);
+    expect(form.questions.every((question) => question.allowCustomAnswer === true)).toBe(true);
   });
 
   it("returns choices and custom text through OMP's distinct native fields", () => {
@@ -100,6 +101,11 @@ describe("OMP question forms", () => {
       ),
     ).toBeUndefined();
     expect(extractOmpElicitationForm(request(properties, ["q0__other"]))).toBeUndefined();
+    expect(
+      extractOmpElicitationForm(
+        request({ ...properties, q2: { ...properties.q2, minItems: 3, maxItems: 1 } }),
+      ),
+    ).toBeUndefined();
   });
 
   it("routes only the configured OMP ACP command, independently of its display name", () => {
