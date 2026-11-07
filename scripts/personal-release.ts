@@ -19,10 +19,10 @@ const fixes: ReadonlyArray<{
   { pr: 21439, commit: "962b0fe3985ee7fcb619f1adc47007c0fed9cc34" },
   { pr: 21323, commit: "60250740480898e75cb5cd75630fe38faedd2f4d" },
   { pr: 22698, commit: "52751b06472502f0b147641ec63a276d341439e9" },
-  { pr: 20363, commit: "a6a2b2ae7a4c433d1cba3aaba48ab6a0a70bc296" },
+  { pr: 20363, commit: "8dbcaec48975e8dab6ace31113870011f826ba4f" },
   { pr: 21066, commit: "be8086db026326208ea37af240b76bc6eeeae88b" },
-  { pr: 21770, commit: "669a88a2f2f15692ec2fdb9a70b0f12b23991d86" },
-  { pr: 21801, commit: "4ec8ea9941de082bf30847e4f4b6237f63229f5c" },
+  { pr: 21770, commit: "3eea19794bf4510f76f8866a45e16c04a5352c02" },
+  { pr: 21801, commit: "ce397bcd5a59ab9c1ce56336e7c4115708cf0523" },
   { pr: 22972, commit: "2bdc5868fbe9abec2e1e7551bece085eb28ad755" },
   { pr: 26403, commit: "0a0f9e069605a862fb4db486e7a81a916b1b3691" },
   {
@@ -115,7 +115,7 @@ const fixes: ReadonlyArray<{
     label: "Show native OMP activity and metrics while waiting for task results",
   },
   {
-    commit: "f089fd04434f538cbdfb92e2c78c36d8525db344",
+    commit: "17f8d073e4a289c8606681f6e11847b9b4daeb71",
     label: "Show OMP task jobs in native subagent views with reported progress",
   },
   {
@@ -151,7 +151,7 @@ const fixes: ReadonlyArray<{
     label: "Avoid loading conversation history during orchestration capability discovery",
   },
   {
-    commit: "5af1eef126f1bfc035a15ef78cfbb98d18667c86",
+    commit: "24a75cd0498b89f1b65cf1ef6d423096c98f7676",
     label: "Retain typed busy retry options alongside upstream prompt dispatch",
   },
   {
@@ -159,7 +159,7 @@ const fixes: ReadonlyArray<{
     label: "Keep visible assistant answers in tool-visibility regression checks",
   },
   {
-    commit: "830356856955fd16a8288a0bdea05a3e5afbc5fd",
+    commit: "41a89fe7e50acdbd76851b1b3e864fb22c051703",
     label: "Separate ACP progress updates from final answers at tool starts",
   },
 ];
