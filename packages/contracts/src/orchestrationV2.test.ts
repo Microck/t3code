@@ -46,6 +46,9 @@ describe("orchestration V2 contracts", () => {
       for (const required of [false, true]) {
         expect(decode({ ...question, required }).required).toBe(required);
       }
+      for (const answerType of ["number", "integer"] as const) {
+        expect(decode({ ...question, answerType }).answerType).toBe(answerType);
+      }
     }
   });
 

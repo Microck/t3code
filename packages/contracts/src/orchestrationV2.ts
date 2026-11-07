@@ -1367,6 +1367,7 @@ export const OrchestrationV2UserInputQuestion = Schema.Struct({
   allowCustomAnswer: Schema.optional(Schema.Boolean),
   initialAnswer: Schema.optional(Schema.String),
   required: Schema.optional(Schema.Boolean),
+  answerType: Schema.optional(Schema.Literals(["number", "integer"])),
 });
 export type OrchestrationV2UserInputQuestion = typeof OrchestrationV2UserInputQuestion.Type;
 
