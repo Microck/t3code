@@ -6,6 +6,7 @@ export interface PendingUserInputQuestion {
   readonly allowCustomAnswer?: boolean | undefined;
   readonly initialAnswer?: string | undefined;
   readonly required?: boolean | undefined;
+  readonly answerType?: "number" | "integer" | undefined;
 }
 
 export interface PendingUserInputDraftAnswer {
@@ -16,6 +17,21 @@ export interface PendingUserInputDraftAnswer {
 }
 
 export type PendingUserInputAnswer = string | ReadonlyArray<string>;
+
+export function pendingUserInputAnswerError(
+  question: PendingUserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined,
+): string | null {
+  if (question.answerType === undefined || question.allowCustomAnswer === false) return null;
+  if ((draft?.attachmentCount ?? 0) > 0) return "Enter a number without attachments.";
+  const answer = normalizeDraftAnswer(draft?.customAnswer);
+  if (answer === null) return null;
+  const value = Number(answer);
+  if (!Number.isFinite(value)) return "Enter a finite number.";
+  return question.answerType === "integer" && !Number.isInteger(value)
+    ? "Enter a whole number."
+    : null;
+}
 
 function normalizeDraftAnswer(value: string | undefined): string | null {
   if (typeof value !== "string") return null;
@@ -62,7 +78,8 @@ export function resolvePendingUserInputAnswer(
   question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
 ): PendingUserInputAnswer | null {
-  if (draft?.attachmentsBlocked) return null;
+  if (draft?.attachmentsBlocked || pendingUserInputAnswerError(question, draft) !== null)
+    return null;
   const customAnswer =
     question.allowCustomAnswer === false
       ? null
@@ -163,7 +180,11 @@ export function canSkipPendingUserInputQuestion(
   question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
 ): boolean {
-  return question.required === false && !draft?.attachmentsBlocked;
+  return (
+    question.required === false &&
+    !draft?.attachmentsBlocked &&
+    pendingUserInputAnswerError(question, draft) === null
+  );
 }
 
 /** Answer map omitting blank optional fields, or null while a required answer is missing. */

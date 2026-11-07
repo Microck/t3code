@@ -8195,8 +8195,7 @@ describe("AcpAdapterV2", () => {
             confirm: optionValues(byId.get("confirm"))?.[1],
             count: "3",
             ratio: " 0.5 ",
-            // Not an integer: omitted, since the field is optional.
-            limit: "3.7",
+            limit: "7",
             note: "hi",
             extra: "not in the form",
           };
@@ -8265,6 +8264,7 @@ describe("AcpAdapterV2", () => {
           confirm: false,
           count: 3,
           ratio: 0.5,
+          limit: 7,
           note: "hi",
         },
       });
@@ -8381,6 +8381,12 @@ describe("AcpAdapterV2", () => {
         answer: () => ({ count: "two", note: "hi" }),
       });
       assert.deepStrictEqual(invalid.response, { action: "cancel" });
+      const invalidOptional = yield* runFormElicitation({
+        name: "invalid-optional-integer",
+        requestedSchema: { ...requestedSchema, required: [] },
+        answer: () => ({ count: "1.5", note: "hi" }),
+      });
+      assert.deepStrictEqual(invalidOptional.response, { action: "cancel" });
       const dismissed = yield* runFormElicitation({
         name: "dismissed",
         requestedSchema,

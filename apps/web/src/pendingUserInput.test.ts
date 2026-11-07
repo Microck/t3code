@@ -116,6 +116,28 @@ describe("pending user input question progress", () => {
       canAdvance: true,
     });
   });
+  it("blocks an invalid optional integer until it is corrected or cleared", () => {
+    const question = {
+      id: "count",
+      header: "Count",
+      question: "How many?",
+      options: [],
+      multiSelect: false,
+      required: false,
+      answerType: "integer" as const,
+    };
+    for (const customAnswer of ["1.5", "two", "Infinity"]) {
+      const progress = derivePendingUserInputProgress([question], { count: { customAnswer } }, 0);
+      expect(progress.canAdvance).toBe(false);
+      expect(progress.isComplete).toBe(false);
+    }
+    for (const customAnswer of ["3", ""]) {
+      const progress = derivePendingUserInputProgress([question], { count: { customAnswer } }, 0);
+      expect(progress.canAdvance).toBe(true);
+      expect(progress.isComplete).toBe(true);
+    }
+  });
+
   it("lets an unanswered optional question advance and leaves it out of the answers", () => {
     const other = {
       id: "scope__other",
