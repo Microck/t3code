@@ -1,8 +1,6 @@
 import { TrimmedNonEmptyString } from "@t3tools/contracts";
-import {
-  acpElicitationQuestions,
-  type AcpAdapterV2Flavor,
-} from "@t3tools/provider-acp/server/adapter";
+import type { AcpAdapterV2Flavor } from "@t3tools/provider-acp/server/adapter";
+import { parseElicitationForm } from "@t3tools/provider-acp/server/elicitationForm";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import type { AcpToolCallState } from "@t3tools/provider-acp/server/runtimeModel";
@@ -65,8 +63,14 @@ export const extractOmpElicitationForm: NonNullable<
   ) {
     return undefined;
   }
-  const questions = acpElicitationQuestions(fields, request.message, required);
-  if (questions.some((question) => question.options.length === 0)) return undefined;
+  const parsed = parseElicitationForm(
+    { type: "object", properties: fields, required },
+    request.message,
+  );
+  if (parsed === undefined || parsed.questions.some((question) => question.options.length === 0))
+    return undefined;
+  // The validated OMP companion fields carry custom answers separately from fixed choices.
+  const questions = parsed.questions.map((question) => ({ ...question, allowCustomAnswer: true }));
 
   return {
     questions,
