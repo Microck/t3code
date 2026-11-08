@@ -24,7 +24,7 @@ const fixes: ReadonlyArray<{
   { pr: 21770, commit: "3eea19794bf4510f76f8866a45e16c04a5352c02" },
   { pr: 21801, commit: "ce397bcd5a59ab9c1ce56336e7c4115708cf0523" },
   { pr: 22972, commit: "2bdc5868fbe9abec2e1e7551bece085eb28ad755" },
-  { pr: 26403, commit: "0a0f9e069605a862fb4db486e7a81a916b1b3691" },
+  { pr: 26403, commit: "e876258faa9c0b3f2e04ef17df74bf1414b969a1" },
   {
     commit: "ef97de218b54c8832a894b80b3e2839ee7391210",
     label: "OMP choices and custom answers in one question step",
