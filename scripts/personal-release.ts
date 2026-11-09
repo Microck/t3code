@@ -143,7 +143,7 @@ const fixes: ReadonlyArray<{
     label: "Keep the ACP terminal fixture compatible with Effect diagnostics",
   },
   {
-    commit: "a59e742b453d73dc8795f2c099b3c3c462834598",
+    commit: "a6feb84b2caaf5e9a569547f76441a8963c73fd1",
     label: "Show the current task list in the thread sidebar",
   },
   {
