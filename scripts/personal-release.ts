@@ -23,7 +23,7 @@ const fixes: ReadonlyArray<{
   { pr: 21066, commit: "be8086db026326208ea37af240b76bc6eeeae88b" },
   { pr: 21770, commit: "3eea19794bf4510f76f8866a45e16c04a5352c02" },
   { pr: 21801, commit: "ce397bcd5a59ab9c1ce56336e7c4115708cf0523" },
-  { pr: 22972, commit: "535d7268eb96e5cdac29653f938f877ef4fa6df9" },
+  { pr: 22972, commit: "397eadf0840a622d366490826beb103b93660f67" },
   { pr: 26403, commit: "e876258faa9c0b3f2e04ef17df74bf1414b969a1" },
   {
     commit: "ef97de218b54c8832a894b80b3e2839ee7391210",
