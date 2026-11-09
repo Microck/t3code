@@ -13,7 +13,7 @@ const fixes: ReadonlyArray<{
   readonly label?: string;
 }> = [
   // Preserve upstream's message-start restrictions for side chats and fresh sessions.
-  { pr: 22466, commit: "6a6ac19fd59378b674a695f6f4af48aed4e7a354" },
+  { pr: 22466, commit: "eb3f9196712deb7bc7fbf2617eb5b1b9b6fa9907" },
   { pr: 22842, commit: "910adfe8663687086db3c651017eb1bf6b48bbb6" },
   // Includes the activation-preference prerequisite needed for one resume after Stop.
   { pr: 21439, commit: "962b0fe3985ee7fcb619f1adc47007c0fed9cc34" },
@@ -23,7 +23,7 @@ const fixes: ReadonlyArray<{
   { pr: 21066, commit: "be8086db026326208ea37af240b76bc6eeeae88b" },
   { pr: 21770, commit: "3eea19794bf4510f76f8866a45e16c04a5352c02" },
   { pr: 21801, commit: "ce397bcd5a59ab9c1ce56336e7c4115708cf0523" },
-  { pr: 22972, commit: "2bdc5868fbe9abec2e1e7551bece085eb28ad755" },
+  { pr: 22972, commit: "535d7268eb96e5cdac29653f938f877ef4fa6df9" },
   { pr: 26403, commit: "e876258faa9c0b3f2e04ef17df74bf1414b969a1" },
   {
     commit: "ef97de218b54c8832a894b80b3e2839ee7391210",
@@ -143,7 +143,7 @@ const fixes: ReadonlyArray<{
     label: "Keep the ACP terminal fixture compatible with Effect diagnostics",
   },
   {
-    commit: "f6f049aa613859c4795657abcdbe02cf8138faee",
+    commit: "a59e742b453d73dc8795f2c099b3c3c462834598",
     label: "Show the current task list in the thread sidebar",
   },
   {
