@@ -17,8 +17,8 @@ export function ComposerModelControl(props: {
   readonly prompt: string;
   readonly surfaceColor: string;
   readonly disabled?: boolean;
+  readonly size?: "regular" | "large";
   readonly iconOnly?: boolean;
-  readonly showSummary?: boolean;
   readonly onPress: () => void;
 }) {
   const descriptors = resolveProviderOptionDescriptors({
@@ -28,7 +28,6 @@ export function ComposerModelControl(props: {
   const promptTraits = getPromptControlledTraits(descriptors, props.prompt);
   const summary = props.provider
     ? buildTraitsTriggerDisplay({
-        provider: props.provider,
         descriptors,
         primarySelectDescriptorId: promptTraits.primarySelectDescriptor?.id ?? null,
         ultrathinkPromptControlled: promptTraits.ultrathinkPromptControlled,
@@ -48,6 +47,7 @@ export function ComposerModelControl(props: {
       ]
         .filter(Boolean)
         .join(", ")}
+      size={props.size}
       disabled={props.disabled}
       emphasized
       renderIcon={(size) =>
@@ -71,11 +71,18 @@ export function ComposerModelControl(props: {
           />
         )
       }
-      label={label}
+      label={props.modelOption?.shortName ?? label}
       iconOnly={props.iconOnly}
       suffix={
-        props.showSummary !== false && summary ? (
-          <Text className="text-xs text-foreground-muted" numberOfLines={1}>
+        summary ? (
+          <Text
+            className={
+              props.size === "large"
+                ? "text-sm text-foreground-muted"
+                : "text-xs text-foreground-muted"
+            }
+            numberOfLines={1}
+          >
             {summary}
           </Text>
         ) : undefined
