@@ -12,7 +12,8 @@ import { useId, useState } from "react";
 import { resolveOfficialAcpRegistryIconUrl } from "@t3tools/contracts";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 import { AppText as Text } from "./ui/AppText";
-import { getProviderClient } from "../lib/providerClients";
+import { cn } from "../lib/cn";
+import { getProviderClient, openRouterIcon } from "@t3tools/client-runtime/provider-clients";
 
 type ProviderIconProps = {
   readonly ompModel?: string | undefined;
@@ -109,7 +110,8 @@ export function ProviderIcon(props: ProviderIconProps) {
     );
   }
 
-  const packageIcon = getProviderClient(provider)?.icon;
+  const packageIcon =
+    provider === "openrouter" ? openRouterIcon : getProviderClient(provider)?.icon;
   if (packageIcon) {
     const themeFill = (fill: { readonly light: string; readonly dark: string }) =>
       isDarkMode ? fill.dark : fill.light;
@@ -162,6 +164,20 @@ export function ProviderIcon(props: ProviderIconProps) {
   );
 }
 
+/** Local ACP agents share one fallback glyph, so a badge alone cannot tell instances apart. */
+export function providerInstanceNameLabel(props: {
+  readonly provider: string | null | undefined;
+  readonly iconUrl?: string | null | undefined;
+  readonly displayName: string;
+  readonly showBadge: boolean;
+}): string | null {
+  return props.showBadge &&
+    props.provider === "acpRegistry" &&
+    resolveOfficialAcpRegistryIconUrl(props.iconUrl) === null
+    ? props.displayName
+    : null;
+}
+
 export function ProviderInstanceIcon(props: {
   readonly ompModel?: string | undefined;
   readonly iconUrl?: string | null;
@@ -170,7 +186,7 @@ export function ProviderInstanceIcon(props: {
   readonly displayName: string;
   readonly accentColor?: string;
   readonly showBadge?: boolean;
-  readonly surfaceColor: string;
+  readonly surfaceColor?: string;
 }) {
   const accentColor = normalizeProviderAccentColor(props.accentColor);
   return (
@@ -184,21 +200,20 @@ export function ProviderInstanceIcon(props: {
         />
       </View>
       {props.showBadge ? (
-        // A wide right-aligned box lets the badge fit its initials. Alone, an
-        // absolute badge is capped at the icon's width, which clips "WO".
+        // An absolute badge alone is capped at icon width and clips initials.
         <View
           pointerEvents="none"
           style={{ position: "absolute", right: -3, bottom: -3, width: 32, alignItems: "flex-end" }}
         >
           <View
-            className={accentColor ? undefined : "bg-card"}
+            className={cn(!accentColor && "bg-card", !props.surfaceColor && "border-screen")}
             style={{
               height: 12,
               minWidth: 12,
               paddingHorizontal: 2,
               borderRadius: 999,
               borderWidth: 1,
-              borderColor: props.surfaceColor,
+              ...(props.surfaceColor ? { borderColor: props.surfaceColor } : {}),
               backgroundColor: accentColor,
               alignItems: "center",
               justifyContent: "center",
