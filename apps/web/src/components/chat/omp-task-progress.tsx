@@ -2,6 +2,7 @@ import { ProviderDriverKind } from "@t3tools/contracts";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import {
   ompAgentMetrics,
+  ompJobMetrics,
   ompAgentStatus,
   type OmpTaskProgress,
 } from "@t3tools/client-runtime/work-log/item-detail";
@@ -11,45 +12,55 @@ export function OmpTaskProgressDisplay({ progress }: { readonly progress: OmpTas
   if (progress.kind === "jobs") {
     return (
       <ul aria-label="Background jobs" className="space-y-1 text-xs">
-        {progress.jobs.map((job) => (
-          <li key={job.id}>
-            <details aria-label={job.label || job.id} className="border-b border-border/40 pb-1">
-              <summary className="cursor-pointer py-1 text-foreground select-none">
-                <ProviderInstanceIcon
-                  driverKind={ProviderDriverKind.make("acpRegistry")}
-                  displayName="OMP"
-                  ompModel={job.resolvedModelIdentity ?? job.resolvedModel}
-                  className="mr-1 inline-flex size-3 align-middle"
-                  iconClassName="size-3"
-                />
-                <span className="font-medium">{job.label || job.id}</span>
-                <span className="ml-2 text-muted-foreground">
-                  {ompAgentStatus(job)} · {Math.floor(job.durationMs / 1000)}s
-                </span>
-              </summary>
-              <div className="space-y-2 py-1 pl-4">
-                <p>
-                  {job.id} · {job.type}
-                </p>
-                {(job.resolvedModelIdentity ?? job.resolvedModel) ? (
-                  <p className="break-all">{job.resolvedModelIdentity ?? job.resolvedModel}</p>
-                ) : null}
-                {job.resolvedThinkingLevel ? <p>Reasoning: {job.resolvedThinkingLevel}</p> : null}
-                {job.exitCode !== undefined ? <p>Exit code: {job.exitCode}</p> : null}
-                {job.errorText ? (
-                  <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words text-destructive">
-                    {job.errorText}
-                  </pre>
-                ) : null}
-                {job.resultText ? (
-                  <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words">
-                    {job.resultText}
-                  </pre>
-                ) : null}
-              </div>
-            </details>
-          </li>
-        ))}
+        {progress.jobs.map((job) => {
+          const metrics = ompJobMetrics(job);
+          return (
+            <li key={job.id}>
+              <details aria-label={job.label || job.id} className="border-b border-border/40 pb-1">
+                <summary className="cursor-pointer py-1 text-foreground select-none">
+                  <ProviderInstanceIcon
+                    driverKind={ProviderDriverKind.make("acpRegistry")}
+                    displayName="OMP"
+                    ompModel={job.resolvedModelIdentity ?? job.resolvedModel}
+                    className="mr-1 inline-flex size-3 align-middle"
+                    iconClassName="size-3"
+                  />
+                  <span className="font-medium">{job.label || job.id}</span>
+                  <span className="ml-2 text-muted-foreground">
+                    {ompAgentStatus(job)} · {Math.floor(job.durationMs / 1000)}s
+                  </span>
+                </summary>
+                <div className="space-y-2 py-1 pl-4">
+                  {job.widget?.title && job.widget.title !== job.label ? (
+                    <p>{job.widget.title}</p>
+                  ) : null}
+                  {(job.widget?.stage ?? job.stage) ? (
+                    <p>{job.widget?.stage ?? job.stage}</p>
+                  ) : null}
+                  {metrics ? <p>{metrics}</p> : null}
+                  <p>
+                    {job.id} · {job.type}
+                  </p>
+                  {(job.resolvedModelIdentity ?? job.resolvedModel) ? (
+                    <p className="break-all">{job.resolvedModelIdentity ?? job.resolvedModel}</p>
+                  ) : null}
+                  {job.resolvedThinkingLevel ? <p>Reasoning: {job.resolvedThinkingLevel}</p> : null}
+                  {job.exitCode !== undefined ? <p>Exit code: {job.exitCode}</p> : null}
+                  {job.errorText ? (
+                    <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words text-destructive">
+                      {job.errorText}
+                    </pre>
+                  ) : null}
+                  {job.resultText ? (
+                    <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words">
+                      {job.resultText}
+                    </pre>
+                  ) : null}
+                </div>
+              </details>
+            </li>
+          );
+        })}
       </ul>
     );
   }
