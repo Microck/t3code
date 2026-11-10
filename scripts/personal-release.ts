@@ -61,7 +61,7 @@ const fixes: ReadonlyArray<{
     label: "Package mirror failover on GitHub-hosted runners",
   },
   {
-    commit: "8cf8c2c77dd8824c06cc705d78a922b9fdacc35b",
+    commit: "38715e9b2858831fcf9c1fdf19ffffc302a58055",
     label: "Discover every advertised ACP command and skill without a count cap",
   },
   {
