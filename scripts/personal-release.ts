@@ -147,7 +147,7 @@ const fixes: ReadonlyArray<{
     label: "Show the current task list in the thread sidebar",
   },
   {
-    commit: "85968454dff4873f0516eb49fb7b9bde84535f82",
+    commit: "59afe3c80de8b758bb45775a27c1dd0c881a90e1",
     label: "Avoid loading conversation history during orchestration capability discovery",
   },
   {
